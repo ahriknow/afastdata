@@ -1,0 +1,7 @@
+[workspace]
+members = ["afastdata-core", "afastdata-macro", "afastdata"]
+resolver = "2"
+
+[workspace.dependencies]
+afastdata-core = { path = "afastdata-core", version = "0.0.1" }
+afastdata-macro = { path = "afastdata-macro", version = "0.0.1" }

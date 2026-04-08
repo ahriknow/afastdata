@@ -1,0 +1,21 @@
+[package]
+name = "afastdata-macro"
+version = "0.0.1"
+edition = "2021"
+authors = ["ahriknow <ahriknow@ahriknow.com>"]
+description = "Derive macros for afastdata serialization and deserialization"
+license = "MIT"
+readme = "../README.md"
+repository = "https://github.com/ahriknow/afastdata"
+homepage = "https://github.com/ahriknow/afastdata"
+documentation = "https://docs.rs/afastdata-macro"
+keywords = ["serialization", "binary", "derive", "macro"]
+categories = ["encoding"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "extra-traits"] }
+quote = "1"
+proc-macro2 = "1"
