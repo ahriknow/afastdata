@@ -1,6 +1,6 @@
 [package]
 name = "afastdata"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["ahriknow <ahriknow@ahriknow.com>"]
 description = "A high-performance binary serialization/deserialization library with derive macros for Rust types"

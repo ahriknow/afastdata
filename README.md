@@ -25,14 +25,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.1"
+afastdata = "0.0.2"
 ```
 
 如需 `u64` 长度前缀：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.1", features = ["len-u64"] }
+afastdata = { version = "0.0.2", features = ["len-u64"] }
 ```
 
 ### 基本用法
@@ -112,6 +112,56 @@ fn main() {
     assert_eq!(resp, decoded);
 }
 ```
+
+## 数据校验
+
+通过 `#[validate(...)]` 属性，为结构体字段添加校验规则。
+
+### 示例
+
+```rust
+use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct A {
+    #[validate(
+        gt(10, 0, "${field} 必须大于 10"),
+        lte(100, 0, "${field} 必须小于等于 100")
+    )]
+    a: i64,
+
+    #[validate(len(
+        10,
+        100,
+        1,
+        "${field} 长度必须大于等于 10 且小于等于 100"
+    ))]
+    b: Option<String>,
+
+    #[validate(func("v"))]
+    c: i32,
+}
+
+fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
+    if *value % 2 == 0 {
+        Ok(())
+    } else {
+        Err(ValidateError::new(
+            2,
+            format!("{} 必须是偶数，但实际为 {}", field, value),
+        ))
+    }
+}
+```
+
+### 校验规则
+
+- `gt(value, code, message)`：字段值必须大于 `value`，否则返回 `ValidateError`
+- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`
+- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`
+- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`
+- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间，字段类型 T 或者 Option<T> 中的 T 必须有 len():usize 方法，否则返回 `ValidateError`
+- `func(name)`：调用外部函数 `name` 进行校验，函数签名为 `fn(value: &T, field: &str) -> Result<(), ValidateError>`，返回 `Ok(())` 则校验通过，否则返回 `ValidateError`
 
 ## 支持的类型
 

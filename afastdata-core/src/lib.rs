@@ -30,6 +30,10 @@
 //! By default, `u32` is used as the length prefix (max 4GB). Enable the `len-u64`
 //! feature to switch to `u64`.
 
+mod error;
+
+pub use error::{Error, ValidateError};
+
 /// 长度前缀使用的整数类型。默认为 `u32`，启用 `len-u64` feature 后为 `u64`。
 ///
 /// The integer type used for length prefixes. Defaults to `u32`, switches to `u64`
@@ -90,11 +94,11 @@ pub trait AFastSerialize {
 ///
 /// # 返回值说明 / Return Value Notes
 ///
-/// `from_bytes` 返回 `Result<(Self, usize), String>`：
+/// `from_bytes` 返回 `Result<(Self, usize), Error>`：
 /// - `Ok((value, bytes_consumed))`：成功时返回还原的值和实际消耗的字节数
 /// - `Err(message)`：失败时返回错误描述
 ///
-/// `from_bytes` returns `Result<(Self, usize), String>`:
+/// `from_bytes` returns `Result<(Self, usize), Error>`:
 /// - `Ok((value, bytes_consumed))`: On success, returns the restored value and
 ///   the number of bytes actually consumed
 /// - `Err(message)`: On failure, returns an error description
@@ -126,7 +130,7 @@ pub trait AFastDeserialize: Sized {
     /// 当字节数据不足或格式无效时返回 `Err`。
     ///
     /// Returns `Err` when there are insufficient bytes or the format is invalid.
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String>;
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error>;
 }
 
 /// 从字节切片中精确读取指定数量的字节。内部辅助函数。
@@ -144,14 +148,14 @@ pub trait AFastDeserialize: Sized {
 /// 当 `offset + n` 超出 `data` 长度时返回错误。
 ///
 /// Returns an error when `offset + n` exceeds the length of `data`.
-fn read_exact<'a>(data: &'a [u8], offset: usize, n: usize) -> Result<&'a [u8], String> {
+fn read_exact<'a>(data: &'a [u8], offset: usize, n: usize) -> Result<&'a [u8], Error> {
     if offset + n > data.len() {
-        Err(format!(
+        Err(Error::deserialize(format!(
             "Not enough bytes: need {} at offset {}, have {}",
             n,
             offset,
             data.len()
-        ))
+        )))
     } else {
         Ok(&data[offset..offset + n])
     }
@@ -180,7 +184,7 @@ macro_rules! impl_serialize_int {
             /// 从字节数组中读取 `$size` 字节并还原为数值。
             ///
             /// Reads `$size` bytes from the byte array and restores the value.
-            fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+            fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
                 let bytes = read_exact(data, 0, $size)?;
                 let arr: [u8; $size] = bytes.try_into().unwrap();
                 Ok((Self::from_le_bytes(arr), $size))
@@ -217,12 +221,12 @@ impl AFastDeserialize for bool {
     /// 从 1 个字节反序列化布尔值。仅接受 `0x00`（false）和 `0x01`（true）。
     ///
     /// Deserializes a boolean from 1 byte. Only accepts `0x00` (false) and `0x01` (true).
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let bytes = read_exact(data, 0, 1)?;
         match bytes[0] {
             0 => Ok((false, 1)),
             1 => Ok((true, 1)),
-            v => Err(format!("Invalid bool value: {}", v)),
+            v => Err(Error::deserialize(format!("Invalid bool value: {}", v))),
         }
     }
 }
@@ -250,7 +254,7 @@ fn write_len(buf: &mut Vec<u8>, len: usize) {
 /// 返回 `(实际长度, 新偏移量)`，其中新偏移量 = 原偏移量 + `LEN_INT_SIZE`。
 ///
 /// Returns `(actual_length, new_offset)` where new_offset = original_offset + `LEN_INT_SIZE`.
-fn read_len(data: &[u8], offset: usize) -> Result<(usize, usize), String> {
+fn read_len(data: &[u8], offset: usize) -> Result<(usize, usize), Error> {
     let bytes = read_exact(data, offset, LEN_INT_SIZE)?;
     let arr: [u8; LEN_INT_SIZE] = bytes.try_into().unwrap();
     let len = LenInt::from_le_bytes(arr) as usize;
@@ -292,11 +296,11 @@ impl AFastDeserialize for String {
     ///
     /// Returns an error when there are insufficient bytes or the data contains
     /// invalid UTF-8 sequences.
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let (len, offset) = read_len(data, 0)?;
         let bytes = read_exact(data, offset, len)?;
         let s = std::str::from_utf8(bytes)
-            .map_err(|e| format!("Invalid UTF-8: {}", e))?;
+            .map_err(|e| Error::deserialize(format!("Invalid UTF-8: {}", e)))?;
         Ok((s.to_owned(), offset + len))
     }
 }
@@ -337,7 +341,7 @@ impl<T: AFastDeserialize> AFastDeserialize for Vec<T> {
     ///
     /// Returns an error when there are insufficient bytes or any element fails to
     /// deserialize.
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let (len, mut offset) = read_len(data, 0)?;
         let mut vec = Vec::with_capacity(len);
         for _ in 0..len {
@@ -388,7 +392,7 @@ impl<T: AFastDeserialize> AFastDeserialize for Option<T> {
     /// 当标记字节不是 `0x00` 或 `0x01` 时返回错误。
     ///
     /// Returns an error when the tag byte is neither `0x00` nor `0x01`.
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let bytes = read_exact(data, 0, 1)?;
         match bytes[0] {
             0 => Ok((None, 1)),
@@ -396,7 +400,7 @@ impl<T: AFastDeserialize> AFastDeserialize for Option<T> {
                 let (val, new_offset) = T::from_bytes(&data[1..])?;
                 Ok((Some(val), 1 + new_offset))
             }
-            v => Err(format!("Invalid Option tag: {}", v)),
+            v => Err(Error::deserialize(format!("Invalid Option tag: {}", v))),
         }
     }
 }
@@ -429,7 +433,7 @@ impl<T: AFastDeserialize + Default + Copy, const N: usize> AFastDeserialize for 
     ///
     /// Deserializes `N` elements sequentially. Requires the element type to implement
     /// `Default` and `Copy`.
-    fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let mut arr = [T::default(); N];
         let mut offset = 0;
         for item in arr.iter_mut() {

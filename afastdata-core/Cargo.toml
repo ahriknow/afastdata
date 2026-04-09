@@ -1,6 +1,6 @@
 [package]
 name = "afastdata-core"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["ahriknow <ahriknow@ahriknow.com>"]
 description = "Core traits and built-in type implementations for afastdata serialization"

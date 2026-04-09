@@ -72,7 +72,12 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Index};
+use syn::{
+    parse::{Parse, ParseStream},
+    parse_macro_input,
+    punctuated::Punctuated,
+    Data, DeriveInput, Fields, Index, LitInt, LitStr, Meta, Path, Token, Type, TypePath,
+};
 
 /// 为结构体或枚举生成 [`AFastSerialize`] trait 实现。
 ///
@@ -143,7 +148,7 @@ use syn::{parse_macro_input, Data, DeriveInput, Fields, Index};
 /// 对 union 类型使用此宏会触发编译 panic。
 ///
 /// Using this macro on a union type will trigger a compile-time panic.
-#[proc_macro_derive(AFastSerialize)]
+#[proc_macro_derive(AFastSerialize, attributes(validate))]
 pub fn derive_serialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -154,7 +159,8 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
     let mut generics_with_bounds = generics.clone();
     for param in &mut generics_with_bounds.params {
         if let syn::GenericParam::Type(ref mut ty) = *param {
-            ty.bounds.push(syn::parse_quote!(::afastdata_core::AFastSerialize));
+            ty.bounds
+                .push(syn::parse_quote!(::afastdata_core::AFastSerialize));
         }
     }
     let (impl_generics, _, _) = generics_with_bounds.split_for_impl();
@@ -194,7 +200,8 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         // Tuple variant: write u32 index + field-by-field serialization
                         let field_names: Vec<_> = (0..fields.unnamed.len())
                             .map(|i| {
-                                let ident = syn::Ident::new(&format!("__f{}", i), variant_name.span());
+                                let ident =
+                                    syn::Ident::new(&format!("__f{}", i), variant_name.span());
                                 ident
                             })
                             .collect();
@@ -215,8 +222,11 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                     Fields::Named(fields) => {
                         // 命名字段变体：写入 u32 索引 + 逐字段序列化
                         // Named-field variant: write u32 index + field-by-field serialization
-                        let field_names: Vec<_> =
-                            fields.named.iter().map(|f| f.ident.as_ref().unwrap()).collect();
+                        let field_names: Vec<_> = fields
+                            .named
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
                         let mut serialize_fields = Vec::new();
                         for fname in &field_names {
                             serialize_fields.push(quote! {
@@ -269,7 +279,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastDeserialize for MyStruct {
-///     fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+///     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
 ///         let mut offset: usize = 0;
 ///         let (__val, __new_offset) = AFastDeserialize::from_bytes(&data[offset..])?;
 ///         let field1 = __val;
@@ -291,7 +301,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastDeserialize for MyEnum {
-///     fn from_bytes(data: &[u8]) -> Result<(Self, usize), String> {
+///     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
 ///         let mut offset: usize = 0;
 ///         let (__tag, __new_offset) = <u32 as AFastDeserialize>::from_bytes(&data[offset..])?;
 ///         offset += __new_offset;
@@ -323,7 +333,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 /// 对 union 类型使用此宏会触发编译 panic。
 ///
 /// Using this macro on a union type will trigger a compile-time panic.
-#[proc_macro_derive(AFastDeserialize)]
+#[proc_macro_derive(AFastDeserialize, attributes(validate))]
 pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -334,8 +344,10 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     let mut generics_with_bounds = generics.clone();
     for param in &mut generics_with_bounds.params {
         if let syn::GenericParam::Type(ref mut ty) = *param {
-            ty.bounds.push(syn::parse_quote!(::afastdata_core::AFastSerialize));
-            ty.bounds.push(syn::parse_quote!(::afastdata_core::AFastDeserialize));
+            ty.bounds
+                .push(syn::parse_quote!(::afastdata_core::AFastSerialize));
+            ty.bounds
+                .push(syn::parse_quote!(::afastdata_core::AFastDeserialize));
         }
     }
     let (impl_generics, _, _) = generics_with_bounds.split_for_impl();
@@ -347,7 +359,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                 generate_deserialize_fields(&data.fields, &name, &ty_generics);
             quote! {
                 impl #impl_generics ::afastdata_core::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::std::string::String> {
+                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata_core::Error> {
                         let mut offset: usize = 0;
                         #(#field_desers)*
                         Ok((#construct, offset))
@@ -421,7 +433,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
 
             quote! {
                 impl #impl_generics ::afastdata_core::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::std::string::String> {
+                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata_core::Error> {
                         let mut offset: usize = 0;
                         // 读取 u32 变体索引
                         // Read the u32 variant index
@@ -429,7 +441,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         offset += __new_offset;
                         match __tag_bytes {
                             #(#arms)*
-                            v => Err(::std::format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name))),
+                            v => Err(::afastdata_core::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
                     }
                 }
@@ -493,6 +505,50 @@ fn generate_serialize_fields(
     }
 }
 
+struct Range {
+    int: LitInt,
+    _comma1: Token![,],
+    code: LitInt,
+    _comma2: Token![,],
+    msg: LitStr,
+}
+
+impl Parse for Range {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Range {
+            int: input.parse()?,
+            _comma1: input.parse()?,
+            code: input.parse()?,
+            _comma2: input.parse()?,
+            msg: input.parse()?,
+        })
+    }
+}
+
+struct Length {
+    min: LitInt,
+    _comma1: Token![,],
+    max: LitInt,
+    _comma2: Token![,],
+    code: LitInt,
+    _comma3: Token![,],
+    msg: LitStr,
+}
+
+impl Parse for Length {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        Ok(Length {
+            min: input.parse()?,
+            _comma1: input.parse()?,
+            max: input.parse()?,
+            _comma2: input.parse()?,
+            code: input.parse()?,
+            _comma3: input.parse()?,
+            msg: input.parse()?,
+        })
+    }
+}
+
 /// 为结构体的字段生成反序列化代码以及构造表达式。内部辅助函数。
 ///
 /// Generates deserialization code for struct fields along with the construction
@@ -537,10 +593,153 @@ fn generate_deserialize_fields(
             let mut field_names = Vec::new();
             for f in &named.named {
                 let fname = f.ident.as_ref().unwrap();
+                let ftype = &f.ty;
                 field_names.push(fname.clone());
+
+                let mut validates = Vec::new();
+                for attr in &f.attrs {
+                    if attr.path().is_ident("validate") {
+                        let nested = attr
+                            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                            .unwrap();
+                        for meta in nested {
+                            match meta {
+                                Meta::List(meta) => {
+                                    if meta.path.is_ident("gt") {
+                                        let inner = meta.parse_args::<Range>().unwrap();
+                                        let gt_value = inner.int.base10_parse::<i64>().unwrap();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        validates.push(quote! {
+                                            if #fname <= #gt_value {
+                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        });
+                                    } else if meta.path.is_ident("gte") {
+                                        let inner = meta.parse_args::<Range>().unwrap();
+                                        let gt_value = inner.int.base10_parse::<i64>().unwrap();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        validates.push(quote! {
+                                            if #fname < #gt_value {
+                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        });
+                                    } else if meta.path.is_ident("lt") {
+                                        let inner = meta.parse_args::<Range>().unwrap();
+                                        let lt_value = inner.int.base10_parse::<i64>().unwrap();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        validates.push(quote! {
+                                            if #fname >= #lt_value {
+                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        });
+                                    } else if meta.path.is_ident("lte") {
+                                        let inner = meta.parse_args::<Range>().unwrap();
+                                        let lt_value = inner.int.base10_parse::<i64>().unwrap();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        validates.push(quote! {
+                                            if #fname > #lt_value {
+                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        });
+                                    } else if meta.path.is_ident("len") {
+                                        let field_is_option = match ftype {
+                                            Type::Path(TypePath {
+                                                path: Path { segments, .. },
+                                                ..
+                                            }) => {
+                                                segments.len() == 1 && segments[0].ident == "Option"
+                                            }
+                                            _ => false,
+                                        };
+
+                                        let inner = meta.parse_args::<Length>().unwrap();
+                                        let min_value = inner.min.base10_parse::<i64>().unwrap();
+                                        let max_value = inner.max.base10_parse::<i64>().unwrap();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        if min_value > max_value {
+                                            panic!("Invalid validation: min value {} is greater than max value {} for field {}", min_value, max_value, fname);
+                                        }
+                                        if min_value < 0 && max_value < 0 {
+                                            panic!("Invalid validation: both min and max values are negative for field {}", fname);
+                                        } else if min_value < 0 {
+                                            let max: usize = max_value.try_into().unwrap();
+                                            validates.push(quote! {
+                                                if #fname.len() > #max {
+                                                    return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                }
+                                            });
+                                        } else if max_value < 0 {
+                                            let min: usize = min_value.try_into().unwrap();
+                                            validates.push(quote! {
+                                                if #fname.len() < #min {
+                                                    return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                }
+                                            });
+                                        } else {
+                                            let min: usize = min_value.try_into().unwrap();
+                                            let max: usize = max_value.try_into().unwrap();
+                                            if field_is_option {
+                                                validates.push(quote! {
+                                                    let length = match &#fname {  // 使用引用
+                                                        Some(s) => {
+                                                            let __length = s.len();
+                                                            if __length < #min || __length > #max {
+                                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                            }
+                                                        },
+                                                        None => {},
+                                                    };
+                                                });
+                                            } else {
+                                                validates.push(quote! {
+                                                    if #fname.len() > #max {
+                                                        return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    } else if meta.path.is_ident("func") {
+                                        let inner = meta.parse_args::<LitStr>().unwrap();
+                                        let ident =
+                                            syn::parse_str::<syn::Ident>(&inner.value()).unwrap();
+                                        let field = fname.to_string();
+                                        validates.push(quote! {
+                                            match #ident(&#fname, #field) {
+                                                Ok(()) => {},
+                                                Err(e) => return Err(e.to_afastdata_error()),
+                                            }
+                                        });
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
                 desers.push(quote! {
                     let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
-                    let #fname = __val;
+                    let #fname: #ftype = __val;
+                    #(#validates)*
                     offset += __new_offset;
                 });
             }

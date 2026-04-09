@@ -25,14 +25,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.1"
+afastdata = "0.0.2"
 ```
 
 For `u64` length prefix support:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.1", features = ["len-u64"] }
+afastdata = { version = "0.0.2", features = ["len-u64"] }
 ```
 
 ### Basic Usage
@@ -112,6 +112,56 @@ fn main() {
     assert_eq!(resp, decoded);
 }
 ```
+
+## Validation
+
+You can add validation rules to your struct fields using the `#[validate(...)]` attribute.
+
+### Example
+
+```rust
+use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct A {
+    #[validate(
+        gt(10, 0, "${field} must be greater than 10"),
+        lte(100, 0, "${field} must be less than or equal to 100")
+    )]
+    a: i64,
+
+    #[validate(len(
+        10,
+        100,
+        1，
+        "${field} must be greater than or equal to 10 and less than or equal to 100"
+    ))]
+    b: Option<String>,
+
+    #[validate(func("v"))]
+    c: i32,
+}
+
+fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
+    if *value % 2 == 0 {
+        Ok(())
+    } else {
+        Err(ValidateError::new(
+            ,2,
+            format!("{} must be an even number, but got {}", field, value),
+        ))
+    }
+}
+```
+
+### Validate Attribute
+
+- `gt(value, code, message)`:field value must be greater than `value`, otherwise return `ValidateError`
+- `gte(value, code, message)`:field value must be greater than or equal to `value`, otherwise return `ValidateError`
+- `lt(value, code, message)`:field value must be less than `value`, otherwise return `ValidateError`
+- `lte(value, code, message)`:field value must be less than or equal to `value`, otherwise return `ValidateError`
+- `len(min, max, code, message)`:field length must be between `min` and `max`, field type T or T in Option<T> must impl len():usize function, otherwise return `ValidateError`
+- `func(name)`:call external function `name` to perform validation, signature `fn(value: &T, field: &str) -> Result<(), ValidateError>`, return `Ok(())` if validation passes, otherwise return `ValidateError`
 
 ## Supported Types
 
