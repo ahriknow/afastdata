@@ -2,6 +2,10 @@
 members = ["afastdata-core", "afastdata-macro", "afastdata"]
 resolver = "2"
 
+[workspace.package]
+version = "0.0.2"
+edition = "2024"
+
 [workspace.dependencies]
 afastdata-core = { path = "afastdata-core", version = "0.0.2" }
 afastdata-macro = { path = "afastdata-macro", version = "0.0.2" }

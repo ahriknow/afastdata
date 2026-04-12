@@ -2,13 +2,13 @@ use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 struct A {
-    #[validate(
+    #[afast(
         gt(10, 0, "${field} must be greater than 10"),
         lte(100, 0, "${field} must be less than or equal to 100")
     )]
     a: i64,
 
-    #[validate(len(
+    #[afast(len(
         10,
         100,
         1,
@@ -16,8 +16,11 @@ struct A {
     ))]
     b: Option<String>,
 
-    #[validate(func("v"))]
+    #[afast(func("v"))]
     c: i32,
+
+    #[afast(of([1, 2, 3], 0, "${field} must be one of [1, 2, 3]"))]
+    d: i64,
 }
 
 fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
@@ -36,6 +39,7 @@ fn main() {
         a: 100,
         b: Some("1234567890".to_string()),
         c: 50,
+        d: 1,
     };
     let a_bytes = a.to_bytes();
     let a_copy = A::from_bytes(&a_bytes).unwrap();

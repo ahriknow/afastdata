@@ -45,7 +45,7 @@
 //!
 //! ## 示例 / Example
 //!
-//! ```ignore
+//! ```rust
 //! use afastdata::{AFastSerialize, AFastDeserialize};
 //!
 //! #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
@@ -73,10 +73,10 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
+    Data, DeriveInput, Fields, Index, Lit, LitInt, LitStr, Meta, Path, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
-    Data, DeriveInput, Fields, Index, LitInt, LitStr, Meta, Path, Token, Type, TypePath,
 };
 
 /// 为结构体或枚举生成 [`AFastSerialize`] trait 实现。
@@ -148,7 +148,7 @@ use syn::{
 /// 对 union 类型使用此宏会触发编译 panic。
 ///
 /// Using this macro on a union type will trigger a compile-time panic.
-#[proc_macro_derive(AFastSerialize, attributes(validate))]
+#[proc_macro_derive(AFastSerialize, attributes(afast))]
 pub fn derive_serialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -333,7 +333,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 /// 对 union 类型使用此宏会触发编译 panic。
 ///
 /// Using this macro on a union type will trigger a compile-time panic.
-#[proc_macro_derive(AFastDeserialize, attributes(validate))]
+#[proc_macro_derive(AFastDeserialize, attributes(afast))]
 pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
@@ -549,6 +549,110 @@ impl Parse for Length {
     }
 }
 
+#[derive(Clone)]
+enum ValidateValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+impl ValidateValue {
+    /// 将值转换为代码生成中使用的 TokenStream
+    ///
+    /// 例如：
+    /// ValidateValue::Int(42) → quote! { 42 }
+    /// ValidateValue::Str("hello") → quote! { "hello" }
+    fn to_token_stream(&self) -> proc_macro2::TokenStream {
+        match self {
+            ValidateValue::Int(v) => quote! { #v },
+
+            ValidateValue::Float(v) => {
+                // 浮点数通过字符串解析来保持精度
+                let v_str = v.to_string();
+                v_str.parse().unwrap_or_else(|_| {
+                    // 如果字符串解析失败，使用直接值
+                    quote! { #v }
+                })
+            }
+
+            ValidateValue::Bool(v) => quote! { #v },
+            ValidateValue::Str(v) => quote! { #v },
+        }
+    }
+}
+
+struct OfValidator {
+    allowed_values: Vec<ValidateValue>,
+    code: syn::LitInt,
+    msg: syn::LitStr,
+}
+
+impl Parse for OfValidator {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let content;
+        syn::bracketed!(content in input);
+
+        let mut values = Vec::new();
+
+        if !content.is_empty() {
+            loop {
+                let lit = content.parse::<Lit>()?;
+
+                let value = match lit {
+                    Lit::Int(lit_int) => {
+                        let int_value: i64 = lit_int.base10_parse()?;
+                        ValidateValue::Int(int_value)
+                    }
+
+                    Lit::Float(lit_float) => {
+                        let float_value: f64 = lit_float.base10_parse()?;
+                        ValidateValue::Float(float_value)
+                    }
+
+                    Lit::Bool(lit_bool) => ValidateValue::Bool(lit_bool.value),
+
+                    Lit::Str(lit_str) => ValidateValue::Str(lit_str.value()),
+
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &lit,
+                            "unsupported literal type in 'of' validator; \
+                             only int, float, bool, and str literals are supported",
+                        ));
+                    }
+                };
+
+                values.push(value);
+
+                if !content.peek(Token![,]) {
+                    break;
+                }
+
+                content.parse::<Token![,]>()?;
+
+                if content.is_empty() {
+                    break;
+                }
+            }
+        }
+
+        input.parse::<Token![,]>()?;
+
+        let code = input.parse::<syn::LitInt>()?;
+
+        input.parse::<Token![,]>()?;
+
+        let msg = input.parse::<syn::LitStr>()?;
+
+        Ok(OfValidator {
+            allowed_values: values,
+            code,
+            msg,
+        })
+    }
+}
+
 /// 为结构体的字段生成反序列化代码以及构造表达式。内部辅助函数。
 ///
 /// Generates deserialization code for struct fields along with the construction
@@ -598,7 +702,7 @@ fn generate_deserialize_fields(
 
                 let mut validates = Vec::new();
                 for attr in &f.attrs {
-                    if attr.path().is_ident("validate") {
+                    if attr.path().is_ident("afast") {
                         let nested = attr
                             .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
                             .unwrap();
@@ -677,10 +781,16 @@ fn generate_deserialize_fields(
                                             .value()
                                             .replace("${field}", &fname.to_string());
                                         if min_value > max_value {
-                                            panic!("Invalid validation: min value {} is greater than max value {} for field {}", min_value, max_value, fname);
+                                            panic!(
+                                                "Invalid validation: min value {} is greater than max value {} for field {}",
+                                                min_value, max_value, fname
+                                            );
                                         }
                                         if min_value < 0 && max_value < 0 {
-                                            panic!("Invalid validation: both min and max values are negative for field {}", fname);
+                                            panic!(
+                                                "Invalid validation: both min and max values are negative for field {}",
+                                                fname
+                                            );
                                         } else if min_value < 0 {
                                             let max: usize = max_value.try_into().unwrap();
                                             validates.push(quote! {
@@ -718,6 +828,23 @@ fn generate_deserialize_fields(
                                                 });
                                             }
                                         }
+                                    } else if meta.path.is_ident("of") {
+                                        let inner = meta.parse_args::<OfValidator>().unwrap();
+                                        let allowed_values = inner.allowed_values.clone();
+                                        let code = inner.code.base10_parse::<i64>().unwrap();
+                                        let err_msg = inner
+                                            .msg
+                                            .value()
+                                            .replace("${field}", &fname.to_string());
+                                        let values_tokens: Vec<_> = allowed_values
+                                            .iter()
+                                            .map(|v| v.to_token_stream())
+                                            .collect();
+                                        validates.push(quote! {
+                                            if !matches!(#fname, #(#values_tokens)|*) {
+                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        });
                                     } else if meta.path.is_ident("func") {
                                         let inner = meta.parse_args::<LitStr>().unwrap();
                                         let ident =

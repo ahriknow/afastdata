@@ -115,7 +115,7 @@ fn main() {
 
 ## 数据校验
 
-通过 `#[validate(...)]` 属性，为结构体字段添加校验规则。
+通过 `#[afast(...)]` 属性，为结构体字段添加校验规则。
 
 ### 示例
 
@@ -124,13 +124,13 @@ use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 struct A {
-    #[validate(
+    #[afast(
         gt(10, 0, "${field} 必须大于 10"),
         lte(100, 0, "${field} 必须小于等于 100")
     )]
     a: i64,
 
-    #[validate(len(
+    #[afast(len(
         10,
         100,
         1,
@@ -138,7 +138,7 @@ struct A {
     ))]
     b: Option<String>,
 
-    #[validate(func("v"))]
+    #[afast(func("v"))]
     c: i32,
 }
 
@@ -160,7 +160,8 @@ fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
 - `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`
 - `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`
 - `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`
-- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间，字段类型 T 或者 Option<T> 中的 T 必须有 len():usize 方法，否则返回 `ValidateError`
+- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），字段类型 T 或者 Option<T> 中的 T 必须有 len():usize 方法，否则返回 `ValidateError`
+- `of([v1, v2, ...], code, message)`：字段值必须在 `[v1, v2, ...]` 列表中，否则返回 `ValidateError`
 - `func(name)`：调用外部函数 `name` 进行校验，函数签名为 `fn(value: &T, field: &str) -> Result<(), ValidateError>`，返回 `Ok(())` 则校验通过，否则返回 `ValidateError`
 
 ## 支持的类型

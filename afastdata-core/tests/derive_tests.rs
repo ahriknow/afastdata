@@ -4,7 +4,7 @@ use afastdata_macro::{AFastDeserialize, AFastSerialize};
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 struct A {
     a: i32,
-    #[validate(
+    #[afast(
         lte(10, 0, "b must be at least 10"),
     )]
     b: i64,
