@@ -138,8 +138,11 @@ struct A {
     ))]
     b: Option<String>,
 
-    #[afast(func("v"))]
+    #[afast(func("v"))] // call v function to validate, parameter is `value` and `field name`
     c: i32,
+
+    #[afast(skip("d"))] // call d function, #[afast(skip)] will call i64::default()
+    e: i64,
 }
 
 fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
@@ -152,10 +155,15 @@ fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
         ))
     }
 }
+
+fn d() -> i64 {
+    123
+}
 ```
 
 ### Validate Attribute
 
+- `skip` or `skip(default)`:skip this field's serialization and deserialization, and use default value (calling the default function or implementing Default trait for the field type)
 - `gt(value, code, message)`:field value must be greater than `value`, otherwise return `ValidateError`
 - `gte(value, code, message)`:field value must be greater than or equal to `value`, otherwise return `ValidateError`
 - `lt(value, code, message)`:field value must be less than `value`, otherwise return `ValidateError`

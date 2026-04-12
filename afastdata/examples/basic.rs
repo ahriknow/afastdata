@@ -43,6 +43,13 @@ struct Player {
     skills: Vec<String>,
     /// 公会名称（可选）/ Guild name (optional)
     guild: Option<String>,
+    /// Other
+    #[afast(skip("default"))]
+    other: i32,
+}
+
+fn default() -> i32 {
+    123
 }
 
 /// 游戏物品枚举。展示枚举的三种典型变体形式。
@@ -107,6 +114,7 @@ fn main() {
         hp: 850,
         skills: vec![String::from("fireball"), String::from("shield")],
         guild: Some(String::from("Dragon Slayers")),
+        other: 123,
     };
 
     // 序列化为字节数组 / Serialize to byte array
@@ -175,6 +183,7 @@ fn main() {
         hp: 100,
         skills: vec![],
         guild: None,
+        other: 123,
     };
 
     let bytes = lonely.to_bytes();

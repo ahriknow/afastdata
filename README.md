@@ -138,8 +138,11 @@ struct A {
     ))]
     b: Option<String>,
 
-    #[afast(func("v"))]
+    #[afast(func("v"))] // 调用 v 函数进行校验, 参数为 `值` 和 `字段名`
     c: i32,
+
+    #[afast(skip("d"))] // 调用 d 函数, #[afast(skip)] 将调用 i64::default()
+    e: i64,
 }
 
 fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
@@ -152,10 +155,15 @@ fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
         ))
     }
 }
+
+fn d() -> i64 {
+    123
+}
 ```
 
 ### 校验规则
 
+- `skip` or `skip(default)`：跳过此字段的序列化和反序列化，并使用默认值（调用传入的 default 函数或者给字段类型实现 Default trait）
 - `gt(value, code, message)`：字段值必须大于 `value`，否则返回 `ValidateError`
 - `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`
 - `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`

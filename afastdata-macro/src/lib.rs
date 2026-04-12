@@ -73,7 +73,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Fields, Index, Lit, LitInt, LitStr, Meta, Path, Token, Type, TypePath,
+    Attribute, Data, DeriveInput, Fields, Index, Lit, LitInt, LitStr, Meta, Path, Token, Type,
+    TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -483,6 +484,7 @@ fn generate_serialize_fields(
         Fields::Named(named) => named
             .named
             .iter()
+            .filter(|f| !has_skip_attr(&f.attrs).0)
             .map(|f| {
                 let fname = f.ident.as_ref().unwrap();
                 quote! {
@@ -503,6 +505,44 @@ fn generate_serialize_fields(
             .collect(),
         Fields::Unit => vec![],
     }
+}
+
+fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
+    for attr in attrs {
+        if attr.path().is_ident("afast") {
+            // 尝试解析属性参数为逗号分隔的 Meta 列表
+            if let Ok(nested) =
+                attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            {
+                for meta in nested {
+                    match meta {
+                        // 无参数的 skip: #[afast(skip)]
+                        Meta::Path(path) => {
+                            if path.is_ident("skip") {
+                                return (true, None);
+                            }
+                        }
+                        // 有参数的 skip: #[afast(skip("v"))]
+                        Meta::List(meta_list) => {
+                            if meta_list.path.is_ident("skip") {
+                                // 尝试解析 tokens 为字符串字面量
+                                if let Ok(lit_str) = syn::parse2::<LitStr>(meta_list.tokens.clone())
+                                {
+                                    return (true, Some(lit_str.value()));
+                                } else {
+                                    // 如果解析失败（例如参数不是字符串），返回 true 但参数为 None
+                                    // 你可以根据需要添加错误处理或 panic
+                                    return (true, None);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    (false, None)
 }
 
 struct Range {
@@ -863,12 +903,26 @@ fn generate_deserialize_fields(
                         }
                     }
                 }
-                desers.push(quote! {
-                    let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
-                    let #fname: #ftype = __val;
-                    #(#validates)*
-                    offset += __new_offset;
-                });
+                let (skip, default) = has_skip_attr(&f.attrs);
+                if skip {
+                    if let Some(default) = default {
+                        let ident = syn::parse_str::<syn::Ident>(&default).unwrap();
+                        desers.push(quote! {
+                            let #fname: #ftype = #ident();
+                        });
+                    } else {
+                        desers.push(quote! {
+                            let #fname: #ftype = #ftype::default();
+                        });
+                    }
+                } else {
+                    desers.push(quote! {
+                        let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
+                        let #fname: #ftype = __val;
+                        #(#validates)*
+                        offset += __new_offset;
+                    });
+                }
             }
             let construct = quote! {
                 #name #ty_params { #(#field_names),* }
