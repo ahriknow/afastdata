@@ -1,11 +1,10 @@
 [workspace]
-members = ["afastdata-core", "afastdata-macro", "afastdata"]
+members = ["afastdata-macro", "afastdata"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 
 [workspace.dependencies]
-afastdata-core = { path = "afastdata-core", version = "0.0.2" }
-afastdata-macro = { path = "afastdata-macro", version = "0.0.2" }
+afastdata-macro = { path = "afastdata-macro", version = "0.0.3" }

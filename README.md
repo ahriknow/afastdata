@@ -232,14 +232,11 @@ afastdata/
 ├── Cargo.toml              # Workspace 配置
 ├── README.md               # 中文文档（本文件）
 ├── README_EN.md            # English documentation
-├── afastdata/              # 统一入口 crate
-│   ├── Cargo.toml
-│   ├── src/lib.rs          # Re-export 核心 trait 和 derive 宏
+├── afastdata/              # 核心库 + 统一入口 crate
+│   ├── Cargo.toml          # 含 `len-u64` feature
+│   ├── src/lib.rs          # trait 定义 + 基本类型实现 + re-export derive 宏
 │   └── examples/
 │       └── basic.rs        # 基础使用示例
-├── afastdata-core/         # 核心库
-│   ├── Cargo.toml          # 含 `len-u64` feature
-│   └── src/lib.rs          # trait 定义 + 基本类型实现
 └── afastdata-macro/        # Proc-macro 库
     ├── Cargo.toml
     └── src/lib.rs          # AFastSerialize / AFastDeserialize derive 宏

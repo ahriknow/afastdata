@@ -1,5 +1,4 @@
-use afastdata_core::{AFastDeserialize, AFastSerialize};
-use afastdata_macro::{AFastDeserialize, AFastSerialize};
+use afastdata::{AFastDeserialize, AFastSerialize};
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 struct A {

@@ -232,14 +232,11 @@ afastdata/
 ├── Cargo.toml              # Workspace configuration
 ├── README.md               # Chinese documentation
 ├── README_EN.md            # English documentation (this file)
-├── afastdata/              # Unified entry crate
-│   ├── Cargo.toml
-│   ├── src/lib.rs          # Re-exports core traits and derive macros
+├── afastdata/              # Core library + unified entry crate
+│   ├── Cargo.toml          # Contains `len-u64` feature
+│   ├── src/lib.rs          # Trait definitions + primitive type implementations + re-exports derive macros
 │   └── examples/
 │       └── basic.rs        # Basic usage example
-├── afastdata-core/         # Core library
-│   ├── Cargo.toml          # Contains `len-u64` feature
-│   └── src/lib.rs          # Trait definitions + primitive type implementations
 └── afastdata-macro/        # Proc-macro library
     ├── Cargo.toml
     └── src/lib.rs          # AFastSerialize / AFastDeserialize derive macros

@@ -5,6 +5,7 @@ edition.workspace = true
 authors = ["ahriknow <ahriknow@ahriknow.com>"]
 description = "Derive macros for afastdata serialization and deserialization"
 license = "MIT"
+license-file = "../LICENSE"
 readme = "../README.md"
 repository = "https://github.com/ahriknow/afastdata"
 homepage = "https://github.com/ahriknow/afastdata"

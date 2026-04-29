@@ -45,7 +45,7 @@
 //!
 //! ## 示例 / Example
 //!
-//! ```rust
+//! ```ignore
 //! use afastdata::{AFastSerialize, AFastDeserialize};
 //!
 //! #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
@@ -161,7 +161,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
     for param in &mut generics_with_bounds.params {
         if let syn::GenericParam::Type(ref mut ty) = *param {
             ty.bounds
-                .push(syn::parse_quote!(::afastdata_core::AFastSerialize));
+                .push(syn::parse_quote!(::afastdata::AFastSerialize));
         }
     }
     let (impl_generics, _, _) = generics_with_bounds.split_for_impl();
@@ -171,7 +171,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
         Data::Struct(data) => {
             let serialize_body = generate_serialize_fields(&data.fields, quote!(self));
             quote! {
-                impl #impl_generics ::afastdata_core::AFastSerialize for #name #ty_generics {
+                impl #impl_generics ::afastdata::AFastSerialize for #name #ty_generics {
                     fn to_bytes(&self) -> Vec<u8> {
                         let mut bytes = Vec::new();
                         #(#serialize_body)*
@@ -210,7 +210,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         let mut serialize_fields = Vec::new();
                         for fname in &field_names {
                             serialize_fields.push(quote! {
-                                bytes.extend(::afastdata_core::AFastSerialize::to_bytes(#fname));
+                                bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                             });
                         }
                         arms.push(quote! {
@@ -231,7 +231,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         let mut serialize_fields = Vec::new();
                         for fname in &field_names {
                             serialize_fields.push(quote! {
-                                bytes.extend(::afastdata_core::AFastSerialize::to_bytes(#fname));
+                                bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                             });
                         }
                         arms.push(quote! {
@@ -245,7 +245,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
             }
 
             quote! {
-                impl #impl_generics ::afastdata_core::AFastSerialize for #name #ty_generics {
+                impl #impl_generics ::afastdata::AFastSerialize for #name #ty_generics {
                     fn to_bytes(&self) -> Vec<u8> {
                         let mut bytes = Vec::new();
                         match self {
@@ -346,9 +346,9 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     for param in &mut generics_with_bounds.params {
         if let syn::GenericParam::Type(ref mut ty) = *param {
             ty.bounds
-                .push(syn::parse_quote!(::afastdata_core::AFastSerialize));
+                .push(syn::parse_quote!(::afastdata::AFastSerialize));
             ty.bounds
-                .push(syn::parse_quote!(::afastdata_core::AFastDeserialize));
+                .push(syn::parse_quote!(::afastdata::AFastDeserialize));
         }
     }
     let (impl_generics, _, _) = generics_with_bounds.split_for_impl();
@@ -359,8 +359,8 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
             let (construct, field_desers) =
                 generate_deserialize_fields(&data.fields, &name, &ty_generics);
             quote! {
-                impl #impl_generics ::afastdata_core::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata_core::Error> {
+                impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
+                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
                         let mut offset: usize = 0;
                         #(#field_desers)*
                         Ok((#construct, offset))
@@ -395,7 +395,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                 variant_name.span(),
                             );
                             field_desers.push(quote! {
-                                let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
                                 let #fname = __val;
                                 offset += __new_offset;
                             });
@@ -416,7 +416,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         for f in &fields.named {
                             let fname = f.ident.as_ref().unwrap();
                             field_desers.push(quote! {
-                                let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
                                 let #fname = __val;
                                 offset += __new_offset;
                             });
@@ -433,16 +433,16 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
             }
 
             quote! {
-                impl #impl_generics ::afastdata_core::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata_core::Error> {
+                impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
+                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
                         let mut offset: usize = 0;
                         // 读取 u32 变体索引
                         // Read the u32 variant index
-                        let (__tag_bytes, __new_offset) = <u32 as ::afastdata_core::AFastDeserialize>::from_bytes(&data[offset..])?;
+                        let (__tag_bytes, __new_offset) = <u32 as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
                         offset += __new_offset;
                         match __tag_bytes {
                             #(#arms)*
-                            v => Err(::afastdata_core::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
+                            v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
                     }
                 }
@@ -488,7 +488,7 @@ fn generate_serialize_fields(
             .map(|f| {
                 let fname = f.ident.as_ref().unwrap();
                 quote! {
-                    bytes.extend(::afastdata_core::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                    bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
                 }
             })
             .collect(),
@@ -499,7 +499,7 @@ fn generate_serialize_fields(
             .map(|(i, _)| {
                 let idx = Index::from(i);
                 quote! {
-                    bytes.extend(::afastdata_core::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                    bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
                 }
             })
             .collect(),
@@ -759,7 +759,7 @@ fn generate_deserialize_fields(
                                             .replace("${field}", &fname.to_string());
                                         validates.push(quote! {
                                             if #fname <= #gt_value {
-                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         });
                                     } else if meta.path.is_ident("gte") {
@@ -772,7 +772,7 @@ fn generate_deserialize_fields(
                                             .replace("${field}", &fname.to_string());
                                         validates.push(quote! {
                                             if #fname < #gt_value {
-                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         });
                                     } else if meta.path.is_ident("lt") {
@@ -785,7 +785,7 @@ fn generate_deserialize_fields(
                                             .replace("${field}", &fname.to_string());
                                         validates.push(quote! {
                                             if #fname >= #lt_value {
-                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         });
                                     } else if meta.path.is_ident("lte") {
@@ -798,7 +798,7 @@ fn generate_deserialize_fields(
                                             .replace("${field}", &fname.to_string());
                                         validates.push(quote! {
                                             if #fname > #lt_value {
-                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         });
                                     } else if meta.path.is_ident("len") {
@@ -835,14 +835,14 @@ fn generate_deserialize_fields(
                                             let max: usize = max_value.try_into().unwrap();
                                             validates.push(quote! {
                                                 if #fname.len() > #max {
-                                                    return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                                 }
                                             });
                                         } else if max_value < 0 {
                                             let min: usize = min_value.try_into().unwrap();
                                             validates.push(quote! {
                                                 if #fname.len() < #min {
-                                                    return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                                 }
                                             });
                                         } else {
@@ -854,7 +854,7 @@ fn generate_deserialize_fields(
                                                         Some(s) => {
                                                             let __length = s.len();
                                                             if __length < #min || __length > #max {
-                                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                                             }
                                                         },
                                                         None => {},
@@ -863,7 +863,7 @@ fn generate_deserialize_fields(
                                             } else {
                                                 validates.push(quote! {
                                                     if #fname.len() > #max {
-                                                        return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                                     }
                                                 });
                                             }
@@ -882,7 +882,7 @@ fn generate_deserialize_fields(
                                             .collect();
                                         validates.push(quote! {
                                             if !matches!(#fname, #(#values_tokens)|*) {
-                                                return Err(::afastdata_core::Error::validate(#code, #err_msg.to_string()));
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         });
                                     } else if meta.path.is_ident("func") {
@@ -917,7 +917,7 @@ fn generate_deserialize_fields(
                     }
                 } else {
                     desers.push(quote! {
-                        let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
+                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
                         let #fname: #ftype = __val;
                         #(#validates)*
                         offset += __new_offset;
@@ -935,7 +935,7 @@ fn generate_deserialize_fields(
             for i in 0..unnamed.unnamed.len() {
                 let fname = syn::Ident::new(&format!("__f{}", i), name.span());
                 desers.push(quote! {
-                    let (__val, __new_offset) = ::afastdata_core::AFastDeserialize::from_bytes(&data[offset..])?;
+                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
                     let #fname = __val;
                     offset += __new_offset;
                 });

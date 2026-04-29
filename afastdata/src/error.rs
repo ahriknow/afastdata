@@ -1,6 +1,6 @@
-/// afastdata-core 的核心错误类型。
+/// afastdata 的核心错误类型。
 ///
-/// Core error type for afastdata-core.
+/// Core error type for afastdata.
 ///
 /// Encapsulates serialization, deserialization, and validation failures.
 pub struct Error {
@@ -62,9 +62,9 @@ impl Error {
     }
 }
 
-/// 列举 afastdata-core 可能产生的错误类型。
+/// 列举 afastdata 可能产生的错误类型。
 ///
-/// Enumerates the kinds of errors produced by afastdata-core.
+/// Enumerates the kinds of errors produced by afastdata.
 pub enum ErrorKind {
     /// 序列化失败，携带文本消息。
     ///
@@ -75,7 +75,7 @@ pub enum ErrorKind {
     ///
     /// Deserialization failure with a textual message.
     DeserializeError(String),
-    
+
     /// 验证失败，包含无效值和错误信息。
     ///
     /// Validation failure, carrying the invalid value and a message.
