@@ -11,9 +11,11 @@ A high-performance Rust binary serialization/deserialization framework that auto
 ## Features
 
 - **Zero-config derive macros** — `#[derive(AFastSerialize, AFastDeserialize)]` in one line
-- **Rich type support** — Primitives, `String`, `Vec<T>`, `Option<T>`, `[T; N]`, nested structs, enums
+- **Rich type support** — Primitives, `String`, `Vec<T>`, `Option<T>`, `[T; N]`, `Box<T>`, tuples, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet`, nested structs, enums
 - **Generic support** — Automatically adds trait bounds for generic parameters
 - **Configurable length prefix** — Default `u32` (max 4GB), switchable to `u64` via feature flag
+- **Configurable enum tags** — Default `u8`, switchable to `u16` or `u32` via feature flags
+- **Configurable tuple support** — Default max 16 elements, switchable to 8 or 32 via feature flags
 - **Uniform little-endian** — All multi-byte data uses little-endian encoding
 - **Zero runtime dependencies** — No third-party dependencies at runtime
 
@@ -25,14 +27,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.3"
+afastdata = "0.0.4"
 ```
 
-For `u64` length prefix support:
+For `u64` length prefix or custom enum tag type:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.3", features = ["len-u64"] }
+afastdata = { version = "0.0.4", features = ["len-u64", "tag-u16"] }
 ```
 
 ### Basic Usage
@@ -231,8 +233,14 @@ Validation rules apply to both struct fields and enum variant fields (named and 
 | `Vec<T>` | LenInt element count + element-wise encoding | Variable |
 | `Option<T>` | 1-byte tag + data (only when Some) | Variable |
 | `[T; N]` | Element-wise encoding, no length prefix | Fixed |
+| `(A, B, ...)` | Element-wise encoding, no length prefix | Fixed/Variable |
+| `Box<T>` | Same as `T` | Same as `T` |
+| `HashMap<K, V>` | LenInt entry count + key-value pair encoding | Variable |
+| `HashSet<T>` | LenInt element count + element-wise encoding | Variable |
+| `BTreeMap<K, V>` | LenInt entry count + key-value pair encoding | Variable |
+| `BTreeSet<T>` | LenInt element count + element-wise encoding | Variable |
 | Struct | Field-by-field encoding, no extra prefix | Variable |
-| Enum | `u32` variant index + variant field data | Variable |
+| Enum | Tag(u8/u16/u32) variant index + variant field data | Variable |
 
 ## Encoding Format
 
@@ -246,10 +254,10 @@ All fields are serialized in declaration order with no additional prefix:
 
 ### Enum
 
-Writes a `u32` variant index (starting from 0, incrementing by declaration order), followed by the variant's field data:
+Writes a variant index (Tag type, default `u8`, switchable to `u16` or `u32` via feature flags, starting from 0, incrementing by declaration order), followed by the variant's field data:
 
 ```
-[u32 variant_index][field1 bytes][field2 bytes]...
+[Tag variant_index][field1 bytes][field2 bytes]...
 ```
 
 Unit variants only write the index, with no field data.
@@ -263,9 +271,15 @@ Variable-length types like `String` and `Vec<T>` use `LenInt` as the length pref
 
 ## Feature Flags
 
-| Feature | Description |
-|---|---|
-| `len-u64` | Switch the length prefix from `u32` to `u64` |
+| Feature | Description | Default |
+|---|---|---|
+| `len-u64` | Switch the length prefix from `u32` to `u64` | No |
+| `tag-u8` | Enum variant tag uses `u8` (1 byte, max 256 variants) | Yes |
+| `tag-u16` | Enum variant tag uses `u16` (2 bytes, max 65536 variants) | No |
+| `tag-u32` | Enum variant tag uses `u32` (4 bytes, max ~4.2 billion variants) | No |
+| `tuple-8` | Tuple support up to 8 elements | No |
+| `tuple-16` | Tuple support up to 16 elements | Yes |
+| `tuple-32` | Tuple support up to 32 elements | No |
 
 ## Project Structure
 
@@ -275,10 +289,11 @@ afastdata/
 ├── README.md               # Chinese documentation
 ├── README_EN.md            # English documentation (this file)
 ├── afastdata/              # Core library + unified entry crate
-│   ├── Cargo.toml          # Contains `len-u64` feature
+│   ├── Cargo.toml          # Contains `len-u64`, `tag-*`, `tuple-*` features
 │   ├── src/lib.rs          # Trait definitions + primitive type implementations + re-exports derive macros
-│   └── examples/
-│       └── basic.rs        # Basic usage example
+│   └── tests/
+│       ├── derive_tests.rs     # Derive macro integration tests
+│       └── primitive_tests.rs  # Primitive type serialization tests
 └── afastdata-macro/        # Proc-macro library
     ├── Cargo.toml
     └── src/lib.rs          # AFastSerialize / AFastDeserialize derive macros

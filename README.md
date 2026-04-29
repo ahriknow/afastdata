@@ -10,10 +10,12 @@
 
 ## 特性
 
-- **零配置派生宏** — `#[derive(AFastSerialize, AFastDeserialize)]` 一行搞定
-- **丰富的类型支持** — 基本类型、`String`、`Vec<T>`、`Option<T>`、`[T; N]`、嵌套结构体、枚举
+- **零配置派生宏** — `#[derive(AFastSerialize, AFastDeserialize)]`
+- **丰富的类型支持** — 基本类型、`String`、`Vec<T>`、`Option<T>`、`[T; N]`、`Box<T>`、元组、`HashMap`、`HashSet`、`BTreeMap`、`BTreeSet`、嵌套结构体、枚举
 - **泛型支持** — 自动为泛型参数添加 trait 约束
 - **可配置长度前缀** — 默认 `u32`（最大 4GB），可通过 feature 切换为 `u64`
+- **可配置枚举标签** — 默认 `u8`，可通过 feature 切换为 `u16` 或 `u32`
+- **可配置元组支持** — 默认支持最多 16 个元素，可通过 feature 切换为 8 或 32
 - **统一小端序** — 所有多字节数据使用 little-endian 编码
 - **零外部依赖** — 运行时无第三方依赖
 
@@ -25,14 +27,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.3"
+afastdata = "0.0.4"
 ```
 
-如需 `u64` 长度前缀：
+如需 `u64` 长度前缀或自定义枚举标签类型：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.3", features = ["len-u64"] }
+afastdata = { version = "0.0.4", features = ["len-u64", "tag-u16"] }
 ```
 
 ### 基本用法
@@ -231,8 +233,14 @@ fn main() {
 | `Vec<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
 | `Option<T>` | 1 字节标记 + 数据（仅 Some） | 变长 |
 | `[T; N]` | 逐元素编码，无长度前缀 | 固定 |
+| `(A, B, ...)` | 逐元素编码，无长度前缀 | 固定/变长 |
+| `Box<T>` | 与 `T` 相同 | 与 `T` 相同 |
+| `HashMap<K, V>` | LenInt 键值对数 + 逐对编码 | 变长 |
+| `HashSet<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
+| `BTreeMap<K, V>` | LenInt 键值对数 + 逐对编码 | 变长 |
+| `BTreeSet<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
 | 结构体 | 逐字段编码，无额外前缀 | 变长 |
-| 枚举 | u32 变体索引 + 变体字段数据 | 变长 |
+| 枚举 | Tag(u8/u16/u32) 变体索引 + 变体字段数据 | 变长 |
 
 ## 编码格式详解
 
@@ -246,10 +254,10 @@ fn main() {
 
 ### 枚举
 
-先写入 `u32` 变体索引（从 0 开始，按声明顺序递增），再写入变体字段数据：
+先写入变体索引（Tag 类型，默认 `u8`，可通过 feature 切换为 `u16` 或 `u32`，从 0 开始按声明顺序递增），再写入变体字段数据：
 
 ```
-[u32 variant_index][field1 bytes][field2 bytes]...
+[Tag variant_index][field1 bytes][field2 bytes]...
 ```
 
 Unit 变体只写入索引，无字段数据。
@@ -263,25 +271,32 @@ Unit 变体只写入索引，无字段数据。
 
 ## Feature Flags
 
-| Feature | 说明 |
-|---|---|
-| `len-u64` | 将长度前缀从 `u32` 切换为 `u64` |
+| Feature | 说明 | 默认 |
+|---|---|---|
+| `len-u64` | 将长度前缀从 `u32` 切换为 `u64` | 否 |
+| `tag-u8` | 枚举变体标签使用 `u8`（1 字节，最多 256 个变体） | 是 |
+| `tag-u16` | 枚举变体标签使用 `u16`（2 字节，最多 65536 个变体） | 否 |
+| `tag-u32` | 枚举变体标签使用 `u32`（4 字节，最多约 42 亿个变体） | 否 |
+| `tuple-8` | 元组支持最多 8 个元素 | 否 |
+| `tuple-16` | 元组支持最多 16 个元素 | 是 |
+| `tuple-32` | 元组支持最多 32 个元素 | 否 |
 
 ## 项目结构
 
 ```
 afastdata/
-├── Cargo.toml              # Workspace 配置
-├── README.md               # 中文文档（本文件）
-├── README_EN.md            # English documentation
-├── afastdata/              # 核心库 + 统一入口 crate
-│   ├── Cargo.toml          # 含 `len-u64` feature
-│   ├── src/lib.rs          # trait 定义 + 基本类型实现 + re-export derive 宏
-│   └── examples/
-│       └── basic.rs        # 基础使用示例
-└── afastdata-macro/        # Proc-macro 库
+├── Cargo.toml                  # Workspace 配置
+├── README.md                   # 中文文档（本文件）
+├── README_EN.md                # English documentation
+├── afastdata/                  # 核心库 + 统一入口 crate
+│   ├── Cargo.toml              # 含 `len-u64`、`tag-*`、`tuple-*` features
+│   ├── src/lib.rs              # trait 定义 + 基本类型实现 + re-export derive 宏
+│   └── tests/
+│       ├── derive_tests.rs     # 派生宏集成测试
+│       └── primitive_tests.rs  # 基本类型序列化测试
+└── afastdata-macro/            # Proc-macro 库
     ├── Cargo.toml
-    └── src/lib.rs          # AFastSerialize / AFastDeserialize derive 宏
+    └── src/lib.rs              # AFastSerialize / AFastDeserialize derive 宏
 ```
 
 ## 运行示例
