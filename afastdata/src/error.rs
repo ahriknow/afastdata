@@ -60,6 +60,13 @@ impl Error {
             inner: ErrorKind::ValidateError(value, msg),
         }
     }
+
+    /// 返回错误的具体类型。
+    ///
+    /// Returns the specific kind of this error.
+    pub fn kind(&self) -> &ErrorKind {
+        &self.inner
+    }
 }
 
 /// 列举 afastdata 可能产生的错误类型。
@@ -80,6 +87,29 @@ pub enum ErrorKind {
     ///
     /// Validation failure, carrying the invalid value and a message.
     ValidateError(i64, String),
+}
+
+impl ErrorKind {
+    /// 返回错误消息的引用。
+    ///
+    /// Returns a reference to the error message.
+    pub fn message(&self) -> &str {
+        match self {
+            ErrorKind::SerializeError(msg) => msg,
+            ErrorKind::DeserializeError(msg) => msg,
+            ErrorKind::ValidateError(_, msg) => msg,
+        }
+    }
+
+    /// 返回验证错误码（仅 `ValidateError` 有值）。
+    ///
+    /// Returns the validation error code. Returns `None` for non-validation errors.
+    pub fn code(&self) -> Option<i64> {
+        match self {
+            ErrorKind::ValidateError(code, _) => Some(*code),
+            _ => None,
+        }
+    }
 }
 
 /// 用于更丰富错误构造的验证错误类型。
