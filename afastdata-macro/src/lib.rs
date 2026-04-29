@@ -45,7 +45,8 @@
 //!
 //! ## 示例 / Example
 //!
-//! ```ignore
+//! ```
+//! extern crate afastdata;
 //! use afastdata::{AFastSerialize, AFastDeserialize};
 //!
 //! #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
@@ -80,6 +81,19 @@ use syn::{
     punctuated::Punctuated,
 };
 
+/// 返回枚举变体标签的类型和字节大小，基于编译时 feature 配置。
+///
+/// Returns the enum variant tag type and byte size based on compile-time feature config.
+fn tag_type() -> (proc_macro2::TokenStream, usize) {
+    if cfg!(feature = "tag-u16") {
+        (quote! { u16 }, 2)
+    } else if cfg!(feature = "tag-u32") {
+        (quote! { u32 }, 4)
+    } else {
+        (quote! { u8 }, 1)
+    }
+}
+
 /// 为结构体或枚举生成 [`AFastSerialize`] trait 实现。
 ///
 /// Generates an [`AFastSerialize`] trait implementation for a struct or enum.
@@ -93,7 +107,7 @@ use syn::{
 /// Calls `to_bytes()` on each field, appending the results to a byte buffer
 /// sequentially.
 ///
-/// ```ignore
+/// ```text
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastSerialize for MyStruct {
@@ -101,7 +115,7 @@ use syn::{
 ///         let mut bytes = Vec::new();
 ///         bytes.extend(AFastSerialize::to_bytes(&self.field1));
 ///         bytes.extend(AFastSerialize::to_bytes(&self.field2));
-///         // ...
+///         // ... 依次处理每个字段 / remaining fields processed similarly
 ///         bytes
 ///     }
 /// }
@@ -109,13 +123,13 @@ use syn::{
 ///
 /// ## 枚举 / Enum
 ///
-/// 先写入 `u32` 变体索引（从 0 开始），再写入变体的字段数据。
-/// Unit 变体只写入索引。
+/// 先写入 `u8` 变体索引（从 0 开始），再写入变体的字段数据。
+/// Unit 变体只写入索引。可通过 feature 切换为 `u16` 或 `u32`。
 ///
-/// Writes a `u32` variant index (starting from 0), then the variant's field data.
-/// Unit variants only write the index.
+/// Writes a `u8` variant index (starting from 0), then the variant's field data.
+/// Unit variants only write the index. Switchable to `u16` or `u32` via features.
 ///
-/// ```ignore
+/// ```text
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastSerialize for MyEnum {
@@ -123,10 +137,10 @@ use syn::{
 ///         let mut bytes = Vec::new();
 ///         match self {
 ///             MyEnum::Variant1 => {
-///                 bytes.extend(0u32.to_le_bytes());
+///                 bytes.extend(0u8.to_le_bytes());
 ///             }
 ///             MyEnum::Variant2(field) => {
-///                 bytes.extend(1u32.to_le_bytes());
+///                 bytes.extend(1u8.to_le_bytes());
 ///                 bytes.extend(AFastSerialize::to_bytes(field));
 ///             }
 ///             // ...
@@ -181,65 +195,76 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
             }
         }
         Data::Enum(data) => {
+            let (tag_ty, _) = tag_type();
             let mut arms = Vec::new();
             for (i, variant) in data.variants.iter().enumerate() {
                 let variant_name = &variant.ident;
-                let tag = i as u32;
 
                 match &variant.fields {
                     Fields::Unit => {
-                        // Unit 变体：只写入 u32 索引
-                        // Unit variant: write only the u32 index
                         arms.push(quote! {
                             #name::#variant_name => {
-                                bytes.extend(#tag.to_le_bytes());
+                                bytes.extend((#i as #tag_ty).to_le_bytes());
                             }
                         });
                     }
                     Fields::Unnamed(fields) => {
-                        // 元组变体：写入 u32 索引 + 逐字段序列化
-                        // Tuple variant: write u32 index + field-by-field serialization
                         let field_names: Vec<_> = (0..fields.unnamed.len())
                             .map(|i| {
-                                let ident =
-                                    syn::Ident::new(&format!("__f{}", i), variant_name.span());
-                                ident
+                                syn::Ident::new(&format!("__f{}", i), variant_name.span())
                             })
                             .collect();
                         let field_patterns = &field_names;
                         let mut serialize_fields = Vec::new();
-                        for fname in &field_names {
-                            serialize_fields.push(quote! {
-                                bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
-                            });
+                        for (i, f) in fields.unnamed.iter().enumerate() {
+                            if !has_skip_attr(&f.attrs).0 {
+                                let fname = &field_names[i];
+                                serialize_fields.push(quote! {
+                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                });
+                            }
                         }
                         arms.push(quote! {
                             #name::#variant_name(#(#field_patterns),*) => {
-                                bytes.extend(#tag.to_le_bytes());
+                                bytes.extend((#i as #tag_ty).to_le_bytes());
                                 #(#serialize_fields)*
                             }
                         });
                     }
                     Fields::Named(fields) => {
-                        // 命名字段变体：写入 u32 索引 + 逐字段序列化
-                        // Named-field variant: write u32 index + field-by-field serialization
-                        let field_names: Vec<_> = fields
+                        let all_field_names: Vec<_> = fields
                             .named
                             .iter()
                             .map(|f| f.ident.as_ref().unwrap())
                             .collect();
+                        let non_skip_names: Vec<_> = fields
+                            .named
+                            .iter()
+                            .filter(|f| !has_skip_attr(&f.attrs).0)
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
+                        let has_skip = non_skip_names.len() < all_field_names.len();
                         let mut serialize_fields = Vec::new();
-                        for fname in &field_names {
+                        for fname in &non_skip_names {
                             serialize_fields.push(quote! {
                                 bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                             });
                         }
-                        arms.push(quote! {
-                            #name::#variant_name { #(#field_names),* } => {
-                                bytes.extend(#tag.to_le_bytes());
-                                #(#serialize_fields)*
-                            }
-                        });
+                        if has_skip {
+                            arms.push(quote! {
+                                #name::#variant_name { #(#non_skip_names),*, .. } => {
+                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    #(#serialize_fields)*
+                                }
+                            });
+                        } else {
+                            arms.push(quote! {
+                                #name::#variant_name { #(#non_skip_names),* } => {
+                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    #(#serialize_fields)*
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -276,7 +301,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 /// Calls `from_bytes()` on each field sequentially, using an offset to track
 /// consumed bytes, then constructs the struct instance.
 ///
-/// ```ignore
+/// ```text
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastDeserialize for MyStruct {
@@ -293,20 +318,22 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
 ///
 /// ## 枚举 / Enum
 ///
-/// 先读取 `u32` 变体索引，根据索引匹配对应变体，再反序列化该变体的字段。
+/// 先读取 `u8` 变体索引，根据索引匹配对应变体，再反序列化该变体的字段。
+/// 可通过 feature 切换为 `u16` 或 `u32`。
 ///
-/// First reads the `u32` variant index, matches the corresponding variant by index,
+/// First reads the `u8` variant index, matches the corresponding variant by index,
 /// then deserializes the variant's fields.
+/// Switchable to `u16` or `u32` via features.
 ///
-/// ```ignore
+/// ```text
 /// // 以下为生成代码的示意（非实际代码）
 /// // The following is an illustration of generated code (not actual code)
 /// impl AFastDeserialize for MyEnum {
 ///     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
 ///         let mut offset: usize = 0;
-///         let (__tag, __new_offset) = <u32 as AFastDeserialize>::from_bytes(&data[offset..])?;
+///         let (__tag, __new_offset) = <u8 as AFastDeserialize>::from_bytes(&data[offset..])?;
 ///         offset += __new_offset;
-///         match __tag {
+///         match __tag as usize {
 ///             0 => Ok((MyEnum::Variant1, offset)),
 ///             1 => {
 ///                 let (__val, __new_offset) = AFastDeserialize::from_bytes(&data[offset..])?;
@@ -357,7 +384,7 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     let expanded = match &input.data {
         Data::Struct(data) => {
             let (construct, field_desers) =
-                generate_deserialize_fields(&data.fields, &name, &ty_generics);
+                generate_deserialize_fields(&data.fields, name, &ty_generics);
             quote! {
                 impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
                     fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
@@ -369,24 +396,20 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
             }
         }
         Data::Enum(data) => {
+            let (tag_ty, _) = tag_type();
             let mut arms = Vec::new();
             for (i, variant) in data.variants.iter().enumerate() {
                 let variant_name = &variant.ident;
-                let tag = i as u32;
 
                 match &variant.fields {
                     Fields::Unit => {
-                        // Unit 变体：匹配索引后直接返回
-                        // Unit variant: match index and return directly
                         arms.push(quote! {
-                            #tag => {
+                            #i => {
                                 Ok((#name::#variant_name, offset))
                             }
                         });
                     }
                     Fields::Unnamed(fields) => {
-                        // 元组变体：匹配索引后逐字段反序列化
-                        // Tuple variant: match index, then deserialize fields sequentially
                         let mut field_desers = Vec::new();
                         let mut field_names = Vec::new();
                         for (i, f) in fields.unnamed.iter().enumerate() {
@@ -395,41 +418,83 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                 variant_name.span(),
                             );
                             let ftype = &f.ty;
-                            let validates = parse_validations(&fname, ftype, &f.attrs);
-                            field_desers.push(quote! {
-                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
-                                let #fname: #ftype = __val;
-                                #(#validates)*
-                                offset += __new_offset;
-                            });
+                            let (skip, default_fn) = has_skip_attr(&f.attrs);
+                            if skip {
+                                if let Some(func_name) = default_fn {
+                                    match syn::parse_str::<syn::Ident>(&func_name) {
+                                        Ok(ident) => {
+                                            field_desers.push(quote! {
+                                                let #fname: #ftype = #ident();
+                                            });
+                                        }
+                                        Err(_) => {
+                                            field_desers.push(quote! {
+                                                compile_error!(concat!("invalid function name in skip: ", #func_name));
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    field_desers.push(quote! {
+                                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                                    });
+                                }
+                            } else {
+                                let validates = parse_validations(&fname, ftype, &f.attrs);
+                                field_desers.push(quote! {
+                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                    let #fname: #ftype = __val;
+                                    #(#validates)*
+                                    offset += __new_offset;
+                                });
+                            }
                             field_names.push(fname);
                         }
                         arms.push(quote! {
-                            #tag => {
+                            #i => {
                                 #(#field_desers)*
                                 Ok((#name::#variant_name(#(#field_names),*), offset))
                             }
                         });
                     }
                     Fields::Named(fields) => {
-                        // 命名字段变体：匹配索引后逐字段反序列化
-                        // Named-field variant: match index, then deserialize fields sequentially
                         let mut field_desers = Vec::new();
                         let mut field_names = Vec::new();
                         for f in &fields.named {
                             let fname = f.ident.as_ref().unwrap();
                             let ftype = &f.ty;
-                            let validates = parse_validations(fname, ftype, &f.attrs);
-                            field_desers.push(quote! {
-                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
-                                let #fname: #ftype = __val;
-                                #(#validates)*
-                                offset += __new_offset;
-                            });
+                            let (skip, default_fn) = has_skip_attr(&f.attrs);
+                            if skip {
+                                if let Some(func_name) = default_fn {
+                                    match syn::parse_str::<syn::Ident>(&func_name) {
+                                        Ok(ident) => {
+                                            field_desers.push(quote! {
+                                                let #fname: #ftype = #ident();
+                                            });
+                                        }
+                                        Err(_) => {
+                                            field_desers.push(quote! {
+                                                compile_error!(concat!("invalid function name in skip: ", #func_name));
+                                            });
+                                        }
+                                    }
+                                } else {
+                                    field_desers.push(quote! {
+                                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                                    });
+                                }
+                            } else {
+                                let validates = parse_validations(fname, ftype, &f.attrs);
+                                field_desers.push(quote! {
+                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                    let #fname: #ftype = __val;
+                                    #(#validates)*
+                                    offset += __new_offset;
+                                });
+                            }
                             field_names.push(fname);
                         }
                         arms.push(quote! {
-                            #tag => {
+                            #i => {
                                 #(#field_desers)*
                                 Ok((#name::#variant_name { #(#field_names),* }, offset))
                             }
@@ -442,11 +507,9 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                 impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
                     fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
                         let mut offset: usize = 0;
-                        // 读取 u32 变体索引
-                        // Read the u32 variant index
-                        let (__tag_bytes, __new_offset) = <u32 as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
+                        let (__tag_bytes, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
                         offset += __new_offset;
-                        match __tag_bytes {
+                        match __tag_bytes as usize {
                             #(#arms)*
                             v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
@@ -502,6 +565,7 @@ fn generate_serialize_fields(
             .unnamed
             .iter()
             .enumerate()
+            .filter(|(_, f)| !has_skip_attr(&f.attrs).0)
             .map(|(i, _)| {
                 let idx = Index::from(i);
                 quote! {
@@ -515,35 +579,23 @@ fn generate_serialize_fields(
 
 fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
     for attr in attrs {
-        if attr.path().is_ident("afast") {
-            // 尝试解析属性参数为逗号分隔的 Meta 列表
-            if let Ok(nested) =
+        if attr.path().is_ident("afast")
+            && let Ok(nested) =
                 attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-            {
-                for meta in nested {
-                    match meta {
-                        // 无参数的 skip: #[afast(skip)]
-                        Meta::Path(path) => {
-                            if path.is_ident("skip") {
-                                return (true, None);
-                            }
-                        }
-                        // 有参数的 skip: #[afast(skip("v"))]
-                        Meta::List(meta_list) => {
-                            if meta_list.path.is_ident("skip") {
-                                // 尝试解析 tokens 为字符串字面量
-                                if let Ok(lit_str) = syn::parse2::<LitStr>(meta_list.tokens.clone())
-                                {
-                                    return (true, Some(lit_str.value()));
-                                } else {
-                                    // 如果解析失败（例如参数不是字符串），返回 true 但参数为 None
-                                    // 你可以根据需要添加错误处理或 panic
-                                    return (true, None);
-                                }
-                            }
-                        }
-                        _ => {}
+        {
+            for meta in nested {
+                match meta {
+                    Meta::Path(path) if path.is_ident("skip") => {
+                        return (true, None);
                     }
+                    Meta::List(meta_list) if meta_list.path.is_ident("skip") => {
+                        if let Ok(lit_str) = syn::parse2::<LitStr>(meta_list.tokens.clone()) {
+                            return (true, Some(lit_str.value()));
+                        } else {
+                            return (true, None);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -723,16 +775,45 @@ fn parse_validations(
     let mut validates = Vec::new();
     for attr in attrs {
         if attr.path().is_ident("afast") {
-            let nested = attr
+            let nested = match attr
                 .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                .unwrap();
+            {
+                Ok(n) => n,
+                Err(e) => {
+                    validates.push(e.to_compile_error());
+                    continue;
+                }
+            };
             for meta in nested {
-                match meta {
-                    Meta::List(meta) => {
+                if let Meta::List(meta) = meta {
                         if meta.path.is_ident("gt") {
-                            let inner = meta.parse_args::<Range>().unwrap();
-                            let gt_value = inner.int.base10_parse::<i64>().unwrap();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let inner = match meta.parse_args::<Range>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let gt_value = match inner.int.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
@@ -743,9 +824,33 @@ fn parse_validations(
                                 }
                             });
                         } else if meta.path.is_ident("gte") {
-                            let inner = meta.parse_args::<Range>().unwrap();
-                            let gt_value = inner.int.base10_parse::<i64>().unwrap();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let inner = match meta.parse_args::<Range>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let gt_value = match inner.int.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
@@ -756,9 +861,33 @@ fn parse_validations(
                                 }
                             });
                         } else if meta.path.is_ident("lt") {
-                            let inner = meta.parse_args::<Range>().unwrap();
-                            let lt_value = inner.int.base10_parse::<i64>().unwrap();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let inner = match meta.parse_args::<Range>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let lt_value = match inner.int.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
@@ -769,9 +898,33 @@ fn parse_validations(
                                 }
                             });
                         } else if meta.path.is_ident("lte") {
-                            let inner = meta.parse_args::<Range>().unwrap();
-                            let lt_value = inner.int.base10_parse::<i64>().unwrap();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let inner = match meta.parse_args::<Range>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let lt_value = match inner.int.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
@@ -792,42 +945,125 @@ fn parse_validations(
                                 _ => false,
                             };
 
-                            let inner = meta.parse_args::<Length>().unwrap();
-                            let min_value = inner.min.base10_parse::<i64>().unwrap();
-                            let max_value = inner.max.base10_parse::<i64>().unwrap();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let inner = match meta.parse_args::<Length>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let min_value = match inner.min.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.min, format!("invalid min value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let max_value = match inner.max.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.max, format!("invalid max value: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
                             if min_value > max_value {
-                                panic!(
-                                    "Invalid validation: min value {} is greater than max value {} for field {}",
-                                    min_value, max_value, field_name
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "invalid len validation: min ({}) > max ({}) for field `{}`",
+                                            min_value, max_value, field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
                                 );
+                                continue;
                             }
                             if min_value < 0 && max_value < 0 {
-                                panic!(
-                                    "Invalid validation: both min and max values are negative for field {}",
-                                    field_name
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "invalid len validation: both min and max are negative for field `{}`",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
                                 );
+                                continue;
                             } else if min_value < 0 {
-                                let max: usize = max_value.try_into().unwrap();
+                                let max: usize = match max_value.try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        validates.push(
+                                            syn::Error::new_spanned(&inner.max, "value too large for usize")
+                                                .to_compile_error(),
+                                        );
+                                        continue;
+                                    }
+                                };
                                 validates.push(quote! {
                                     if #field_name.len() > #max {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
                             } else if max_value < 0 {
-                                let min: usize = min_value.try_into().unwrap();
+                                let min: usize = match min_value.try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        validates.push(
+                                            syn::Error::new_spanned(&inner.min, "value too large for usize")
+                                                .to_compile_error(),
+                                        );
+                                        continue;
+                                    }
+                                };
                                 validates.push(quote! {
                                     if #field_name.len() < #min {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
                             } else {
-                                let min: usize = min_value.try_into().unwrap();
-                                let max: usize = max_value.try_into().unwrap();
+                                let min: usize = match min_value.try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        validates.push(
+                                            syn::Error::new_spanned(&inner.min, "value too large for usize")
+                                                .to_compile_error(),
+                                        );
+                                        continue;
+                                    }
+                                };
+                                let max: usize = match max_value.try_into() {
+                                    Ok(v) => v,
+                                    Err(_) => {
+                                        validates.push(
+                                            syn::Error::new_spanned(&inner.max, "value too large for usize")
+                                                .to_compile_error(),
+                                        );
+                                        continue;
+                                    }
+                                };
                                 if field_is_option {
                                     validates.push(quote! {
                                         let length = match &#field_name {
@@ -849,9 +1085,24 @@ fn parse_validations(
                                 }
                             }
                         } else if meta.path.is_ident("of") {
-                            let inner = meta.parse_args::<OfValidator>().unwrap();
+                            let inner = match meta.parse_args::<OfValidator>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
                             let allowed_values = inner.allowed_values.clone();
-                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let code = match inner.code.base10_parse::<i64>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
+                                            .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let err_msg = inner
                                 .msg
                                 .value()
@@ -866,9 +1117,26 @@ fn parse_validations(
                                 }
                             });
                         } else if meta.path.is_ident("func") {
-                            let inner = meta.parse_args::<LitStr>().unwrap();
-                            let ident =
-                                syn::parse_str::<syn::Ident>(&inner.value()).unwrap();
+                            let inner = match meta.parse_args::<LitStr>() {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(e.to_compile_error());
+                                    continue;
+                                }
+                            };
+                            let ident = match syn::parse_str::<syn::Ident>(&inner.value()) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(
+                                            &inner,
+                                            format!("invalid function name `{}`: {}", inner.value(), e),
+                                        )
+                                        .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
                             let field = field_name.to_string();
                             validates.push(quote! {
                                 match #ident(&#field_name, #field) {
@@ -877,8 +1145,6 @@ fn parse_validations(
                                 }
                             });
                         }
-                    }
-                    _ => {}
                 }
             }
         }
@@ -937,10 +1203,18 @@ fn generate_deserialize_fields(
                 let (skip, default) = has_skip_attr(&f.attrs);
                 if skip {
                     if let Some(default) = default {
-                        let ident = syn::parse_str::<syn::Ident>(&default).unwrap();
-                        desers.push(quote! {
-                            let #fname: #ftype = #ident();
-                        });
+                        match syn::parse_str::<syn::Ident>(&default) {
+                            Ok(ident) => {
+                                desers.push(quote! {
+                                    let #fname: #ftype = #ident();
+                                });
+                            }
+                            Err(_) => {
+                                desers.push(quote! {
+                                    compile_error!(concat!("invalid function name in skip: ", #default));
+                                });
+                            }
+                        }
                     } else {
                         desers.push(quote! {
                             let #fname: #ftype = #ftype::default();
@@ -963,13 +1237,38 @@ fn generate_deserialize_fields(
         Fields::Unnamed(unnamed) => {
             let mut desers = Vec::new();
             let mut field_names = Vec::new();
-            for i in 0..unnamed.unnamed.len() {
+            for (i, f) in unnamed.unnamed.iter().enumerate() {
                 let fname = syn::Ident::new(&format!("__f{}", i), name.span());
-                desers.push(quote! {
-                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
-                    let #fname = __val;
-                    offset += __new_offset;
-                });
+                let ftype = &f.ty;
+                let (skip, default_fn) = has_skip_attr(&f.attrs);
+                if skip {
+                    if let Some(func_name) = default_fn {
+                        match syn::parse_str::<syn::Ident>(&func_name) {
+                            Ok(ident) => {
+                                desers.push(quote! {
+                                    let #fname: #ftype = #ident();
+                                });
+                            }
+                            Err(_) => {
+                                desers.push(quote! {
+                                    compile_error!(concat!("invalid function name in skip: ", #func_name));
+                                });
+                            }
+                        }
+                    } else {
+                        desers.push(quote! {
+                            let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                        });
+                    }
+                } else {
+                    let validates = parse_validations(&fname, ftype, &f.attrs);
+                    desers.push(quote! {
+                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                        let #fname: #ftype = __val;
+                        #(#validates)*
+                        offset += __new_offset;
+                    });
+                }
                 field_names.push(fname);
             }
             let construct = quote! {

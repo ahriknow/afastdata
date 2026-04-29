@@ -5,17 +5,22 @@ edition.workspace = true
 authors = ["ahriknow <ahriknow@ahriknow.com>"]
 description = "A high-performance binary serialization/deserialization library with derive macros for Rust types"
 license = "MIT"
-license-file = "../LICENSE"
 readme = "../README.md"
 repository = "https://github.com/ahriknow/afastdata"
 homepage = "https://github.com/ahriknow/afastdata"
 documentation = "https://docs.rs/afastdata"
-keywords = ["serialization", "binary", "derive", "macro", "no-std"]
-categories = ["encoding", "no-std"]
+keywords = ["serialization", "binary", "derive", "macro", "validation"]
+categories = ["encoding"]
 
 [dependencies]
 afastdata-macro = { workspace = true }
 
 [features]
-default = []
+default = ["tag-u8", "tuple-16"]
 len-u64 = []
+tag-u8 = ["afastdata-macro/tag-u8"]
+tag-u16 = ["afastdata-macro/tag-u16"]
+tag-u32 = ["afastdata-macro/tag-u32"]
+tuple-8 = []
+tuple-16 = []
+tuple-32 = []

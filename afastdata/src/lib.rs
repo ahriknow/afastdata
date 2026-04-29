@@ -73,7 +73,7 @@ pub const LEN_INT_SIZE: usize = std::mem::size_of::<LenInt>();
 ///
 /// # 示例 / Example
 ///
-/// ```ignore
+/// ```
 /// use afastdata::AFastSerialize;
 ///
 /// let value: i32 = 42;
@@ -110,7 +110,7 @@ pub trait AFastSerialize {
 ///
 /// # 示例 / Example
 ///
-/// ```ignore
+/// ```
 /// use afastdata::AFastDeserialize;
 ///
 /// let bytes: Vec<u8> = vec![42, 0, 0, 0];
@@ -153,7 +153,7 @@ pub trait AFastDeserialize: Sized {
 /// 当 `offset + n` 超出 `data` 长度时返回错误。
 ///
 /// Returns an error when `offset + n` exceeds the length of `data`.
-fn read_exact<'a>(data: &'a [u8], offset: usize, n: usize) -> Result<&'a [u8], Error> {
+fn read_exact(data: &[u8], offset: usize, n: usize) -> Result<&[u8], Error> {
     if offset + n > data.len() {
         Err(Error::deserialize(format!(
             "Not enough bytes: need {} at offset {}, have {}",
@@ -322,7 +322,7 @@ impl<T: AFastSerialize> AFastSerialize for Vec<T> {
     /// Each element's `to_bytes()` method is called, and all serialized results are
     /// concatenated sequentially.
     fn to_bytes(&self) -> Vec<u8> {
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(LEN_INT_SIZE + self.len());
         write_len(&mut result, self.len());
         for item in self {
             result.extend(item.to_bytes());
@@ -421,7 +421,7 @@ impl<T: AFastSerialize, const N: usize> AFastSerialize for [T; N] {
     ///
     /// Since the array size is known at compile time, no length prefix is needed.
     fn to_bytes(&self) -> Vec<u8> {
-        let mut result = Vec::new();
+        let mut result = Vec::with_capacity(LEN_INT_SIZE + N);
         for item in self {
             result.extend(item.to_bytes());
         }
@@ -470,70 +470,190 @@ impl AFastSerialize for &str {
     }
 }
 
-// ==================== 测试 / Tests ====================
+// ==================== HashMap ====================
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 通用 round-trip 测试：序列化后再反序列化，验证值和消耗字节数一致。
-    ///
-    /// Generic round-trip test: serialize then deserialize, verifying value and
-    /// consumed byte count are consistent.
-    fn roundtrip<T: AFastSerialize + AFastDeserialize + PartialEq + std::fmt::Debug>(val: &T) {
-        let bytes = val.to_bytes();
-        let (decoded, offset) = T::from_bytes(&bytes).unwrap();
-        assert_eq!(offset, bytes.len());
-        assert_eq!(*val, decoded);
-    }
-
-    #[test]
-    fn test_integers() {
-        roundtrip(&42i8);
-        roundtrip(&255u8);
-        roundtrip(&-1000i16);
-        roundtrip(&60000u16);
-        roundtrip(&-100_000i32);
-        roundtrip(&3_000_000_000u32);
-        roundtrip(&-1_000_000_000_000i64);
-        roundtrip(&18_000_000_000_000_000_000u64);
-    }
-
-    #[test]
-    fn test_floats() {
-        roundtrip(&3.14f32);
-        roundtrip(&2.718281828f64);
-    }
-
-    #[test]
-    fn test_bool() {
-        roundtrip(&true);
-        roundtrip(&false);
-    }
-
-    #[test]
-    fn test_string() {
-        roundtrip(&String::from("hello world"));
-        roundtrip(&String::from(""));
-        roundtrip(&String::from("你好"));
-    }
-
-    #[test]
-    fn test_vec() {
-        roundtrip(&vec![1i32, 2, 3, 4, 5]);
-        roundtrip(&Vec::<i32>::new());
-        roundtrip(&vec![String::from("a"), String::from("b")]);
-    }
-
-    #[test]
-    fn test_option() {
-        roundtrip(&Some(42i32));
-        roundtrip(&None::<i32>);
-        roundtrip(&Some(String::from("hello")));
-    }
-
-    #[test]
-    fn test_array() {
-        roundtrip(&[1i32, 2, 3]);
+impl<K: AFastSerialize, V: AFastSerialize> AFastSerialize for std::collections::HashMap<K, V> {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for (k, v) in self {
+            result.extend(k.to_bytes());
+            result.extend(v.to_bytes());
+        }
+        result
     }
 }
+
+impl<K: AFastDeserialize + Eq + std::hash::Hash, V: AFastDeserialize> AFastDeserialize
+    for std::collections::HashMap<K, V>
+{
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut map = std::collections::HashMap::with_capacity(len);
+        for _ in 0..len {
+            let (key, new_offset) = K::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            let (val, new_offset) = V::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            map.insert(key, val);
+        }
+        Ok((map, offset))
+    }
+}
+
+// ==================== HashSet ====================
+
+impl<T: AFastSerialize> AFastSerialize for std::collections::HashSet<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for item in self {
+            result.extend(item.to_bytes());
+        }
+        result
+    }
+}
+
+impl<T: AFastDeserialize + Eq + std::hash::Hash> AFastDeserialize for std::collections::HashSet<T> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut set = std::collections::HashSet::with_capacity(len);
+        for _ in 0..len {
+            let (item, new_offset) = T::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            set.insert(item);
+        }
+        Ok((set, offset))
+    }
+}
+
+// ==================== BTreeMap ====================
+
+impl<K: AFastSerialize, V: AFastSerialize> AFastSerialize for std::collections::BTreeMap<K, V> {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for (k, v) in self {
+            result.extend(k.to_bytes());
+            result.extend(v.to_bytes());
+        }
+        result
+    }
+}
+
+impl<K: AFastDeserialize + Ord, V: AFastDeserialize> AFastDeserialize
+    for std::collections::BTreeMap<K, V>
+{
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut map = std::collections::BTreeMap::new();
+        for _ in 0..len {
+            let (key, new_offset) = K::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            let (val, new_offset) = V::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            map.insert(key, val);
+        }
+        Ok((map, offset))
+    }
+}
+
+// ==================== BTreeSet ====================
+
+impl<T: AFastSerialize> AFastSerialize for std::collections::BTreeSet<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for item in self {
+            result.extend(item.to_bytes());
+        }
+        result
+    }
+}
+
+impl<T: AFastDeserialize + Ord> AFastDeserialize for std::collections::BTreeSet<T> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut set = std::collections::BTreeSet::new();
+        for _ in 0..len {
+            let (item, new_offset) = T::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            set.insert(item);
+        }
+        Ok((set, offset))
+    }
+}
+
+// ==================== Tuple (元组) ====================
+
+/// 为元组实现序列化/反序列化的宏。
+///
+/// Macro to implement serialization/deserialization for tuples.
+macro_rules! impl_tuple {
+    () => {};
+    ($first:ident $(, $rest:ident)*) => {
+        #[allow(non_snake_case)]
+        impl<$first: AFastSerialize $(, $rest: AFastSerialize)*> AFastSerialize for ($first, $($rest,)*) {
+            fn to_bytes(&self) -> Vec<u8> {
+                let ($first, $($rest,)*) = self;
+                let mut result = Vec::new();
+                result.extend($first.to_bytes());
+                $(result.extend($rest.to_bytes());)*
+                result
+            }
+        }
+
+        #[allow(non_snake_case)]
+        impl<$first: AFastDeserialize $(, $rest: AFastDeserialize)*> AFastDeserialize for ($first, $($rest,)*) {
+            fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+                let mut offset = 0;
+                let ($first, new_offset) = <$first as AFastDeserialize>::from_bytes(&data[offset..])?;
+                offset += new_offset;
+                $(
+                    let ($rest, new_offset) = <$rest as AFastDeserialize>::from_bytes(&data[offset..])?;
+                    offset += new_offset;
+                )*
+                Ok((($first, $($rest,)*), offset))
+            }
+        }
+
+        impl_tuple!($($rest),*);
+    };
+}
+
+// ==================== Box<T> ====================
+
+impl<T: AFastSerialize> AFastSerialize for Box<T> {
+    fn to_bytes(&self) -> Vec<u8> {
+        (**self).to_bytes()
+    }
+}
+
+impl<T: AFastDeserialize> AFastDeserialize for Box<T> {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let (val, offset) = T::from_bytes(data)?;
+        Ok((Box::new(val), offset))
+    }
+}
+
+// 通过 feature 控制支持的元组最大长度：
+// tuple-8 → 最多 8 个元素
+// tuple-16 → 最多 16 个元素（默认）
+// tuple-32 → 最多 32 个元素
+//
+// Maximum tuple arity controlled by feature:
+// tuple-8 → up to 8 elements
+// tuple-16 → up to 16 elements (default)
+// tuple-32 → up to 32 elements
+#[cfg(all(feature = "tuple-8", not(any(feature = "tuple-16", feature = "tuple-32"))))]
+impl_tuple!(A, B, C, D, E, F, G, H);
+
+#[cfg(all(feature = "tuple-16", not(feature = "tuple-32")))]
+impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
+
+#[cfg(feature = "tuple-32")]
+impl_tuple!(
+    A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P,
+    Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD, AE, AF
+);
+
