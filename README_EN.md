@@ -25,14 +25,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.2"
+afastdata = "0.0.3"
 ```
 
 For `u64` length prefix support:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.2", features = ["len-u64"] }
+afastdata = { version = "0.0.3", features = ["len-u64"] }
 ```
 
 ### Basic Usage
@@ -115,9 +115,9 @@ fn main() {
 
 ## Validation
 
-You can add validation rules to your struct fields using the `#[afast(...)]` attribute.
+You can add validation rules to struct fields and enum variant fields using the `#[afast(...)]` attribute.
 
-### Example
+### Struct Validation Example
 
 ```rust
 use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
@@ -133,8 +133,8 @@ struct A {
     #[afast(len(
         10,
         100,
-        1，
-        "${field} must be greater than or equal to 10 and less than or equal to 100"
+        1,
+        "${field} length must be between 10 and 100"
     ))]
     b: Option<String>,
 
@@ -150,7 +150,7 @@ fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
         Ok(())
     } else {
         Err(ValidateError::new(
-            ,2,
+            2,
             format!("{} must be an even number, but got {}", field, value),
         ))
     }
@@ -161,16 +161,58 @@ fn d() -> i64 {
 }
 ```
 
+### Enum Variant Validation Example
+
+Validation rules also work on named-field and tuple enum variants:
+
+```rust
+use afastdata::{AFastDeserialize, AFastSerialize, ErrorKind};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+enum Command {
+    // Named-field variant
+    Login {
+        #[afast(len(1, 32, 1001, "username ${field} length must be 1-32"))]
+        username: String,
+        #[afast(len(6, 128, 1002, "password ${field} length must be 6-128"))]
+        password: String,
+    },
+    // Tuple variant
+    Send(#[afast(gte(0, 2001, "value must be >= 0"))] i64),
+}
+
+fn main() {
+    // Validation passes
+    let cmd = Command::Login {
+        username: String::from("alice"),
+        password: String::from("secret123"),
+    };
+    let bytes = cmd.to_bytes();
+    assert!(Command::from_bytes(&bytes).is_ok());
+
+    // Validation fails: empty username
+    let cmd = Command::Login {
+        username: String::new(),
+        password: String::from("secret123"),
+    };
+    let bytes = cmd.to_bytes();
+    let err = Command::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(1001, _)));
+}
+```
+
 ### Validate Attribute
 
-- `skip` or `skip(default)`:skip this field's serialization and deserialization, and use default value (calling the default function or implementing Default trait for the field type)
-- `gt(value, code, message)`:field value must be greater than `value`, otherwise return `ValidateError`
-- `gte(value, code, message)`:field value must be greater than or equal to `value`, otherwise return `ValidateError`
-- `lt(value, code, message)`:field value must be less than `value`, otherwise return `ValidateError`
-- `lte(value, code, message)`:field value must be less than or equal to `value`, otherwise return `ValidateError`
-- `len(min, max, code, message)`:field length must be between `min` and `max`, field type T or T in Option<T> must impl len():usize function, otherwise return `ValidateError`
-- `of([v1, v2, ...], code, message)`:field value must be one of `[v1, v2, ...]`, otherwise return `ValidateError`
-- `func(name)`:call external function `name` to perform validation, signature `fn(value: &T, field: &str) -> Result<(), ValidateError>`, return `Ok(())` if validation passes, otherwise return `ValidateError`
+Validation rules apply to both struct fields and enum variant fields (named and tuple variants):
+
+- `skip` or `skip(default)`: skip this field's serialization and deserialization, and use default value (calling the default function or implementing Default trait for the field type)
+- `gt(value, code, message)`: field value must be greater than `value`, otherwise return `ValidateError`
+- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`
+- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`
+- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`
+- `len(min, max, code, message)`: field length must be between `min` and `max`, field type T or T in Option<T> must impl len():usize function, otherwise return `ValidateError`
+- `of([v1, v2, ...], code, message)`: field value must be one of `[v1, v2, ...]`, otherwise return `ValidateError`
+- `func(name)`: call external function `name` to perform validation, signature `fn(value: &T, field: &str) -> Result<(), ValidateError>`, return `Ok(())` if validation passes, otherwise return `ValidateError`
 
 ## Supported Types
 

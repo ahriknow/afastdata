@@ -25,14 +25,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.2"
+afastdata = "0.0.3"
 ```
 
 如需 `u64` 长度前缀：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.2", features = ["len-u64"] }
+afastdata = { version = "0.0.3", features = ["len-u64"] }
 ```
 
 ### 基本用法
@@ -115,9 +115,9 @@ fn main() {
 
 ## 数据校验
 
-通过 `#[afast(...)]` 属性，为结构体字段添加校验规则。
+通过 `#[afast(...)]` 属性，为结构体字段和枚举变体字段添加校验规则。
 
-### 示例
+### 结构体校验示例
 
 ```rust
 use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
@@ -161,7 +161,49 @@ fn d() -> i64 {
 }
 ```
 
+### 枚举变体校验示例
+
+校验规则同样适用于枚举的命名字段变体和元组变体：
+
+```rust
+use afastdata::{AFastDeserialize, AFastSerialize, ErrorKind};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+enum Command {
+    // 命名字段变体
+    Login {
+        #[afast(len(1, 32, 1001, "用户名 ${field} 长度必须在 1-32 之间"))]
+        username: String,
+        #[afast(len(6, 128, 1002, "密码 ${field} 长度必须在 6-128 之间"))]
+        password: String,
+    },
+    // 元组变体
+    Send(#[afast(gte(0, 2001, "值必须 >= 0"))] i64),
+}
+
+fn main() {
+    // 校验通过
+    let cmd = Command::Login {
+        username: String::from("alice"),
+        password: String::from("secret123"),
+    };
+    let bytes = cmd.to_bytes();
+    assert!(Command::from_bytes(&bytes).is_ok());
+
+    // 校验失败：用户名为空
+    let cmd = Command::Login {
+        username: String::new(),
+        password: String::from("secret123"),
+    };
+    let bytes = cmd.to_bytes();
+    let err = Command::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(1001, _)));
+}
+```
+
 ### 校验规则
+
+校验规则适用于结构体字段和枚举变体字段（命名字段和元组变体）：
 
 - `skip` or `skip(default)`：跳过此字段的序列化和反序列化，并使用默认值（调用传入的 default 函数或者给字段类型实现 Default trait）
 - `gt(value, code, message)`：字段值必须大于 `value`，否则返回 `ValidateError`
