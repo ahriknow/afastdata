@@ -389,14 +389,17 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         // Tuple variant: match index, then deserialize fields sequentially
                         let mut field_desers = Vec::new();
                         let mut field_names = Vec::new();
-                        for _ in &fields.unnamed {
+                        for (i, f) in fields.unnamed.iter().enumerate() {
                             let fname = syn::Ident::new(
-                                &format!("__f{}", field_names.len()),
+                                &format!("__f{}", i),
                                 variant_name.span(),
                             );
+                            let ftype = &f.ty;
+                            let validates = parse_validations(&fname, ftype, &f.attrs);
                             field_desers.push(quote! {
                                 let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
-                                let #fname = __val;
+                                let #fname: #ftype = __val;
+                                #(#validates)*
                                 offset += __new_offset;
                             });
                             field_names.push(fname);
@@ -415,9 +418,12 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         let mut field_names = Vec::new();
                         for f in &fields.named {
                             let fname = f.ident.as_ref().unwrap();
+                            let ftype = &f.ty;
+                            let validates = parse_validations(fname, ftype, &f.attrs);
                             field_desers.push(quote! {
                                 let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
-                                let #fname = __val;
+                                let #fname: #ftype = __val;
+                                #(#validates)*
                                 offset += __new_offset;
                             });
                             field_names.push(fname);
@@ -693,6 +699,193 @@ impl Parse for OfValidator {
     }
 }
 
+/// 解析字段上的 `#[afast(...)]` 校验属性，生成校验代码。
+///
+/// Parses `#[afast(...)]` validation attributes on a field and generates
+/// validation code blocks.
+///
+/// # 参数 / Parameters
+///
+/// - `field_name`：字段名 / Field name
+/// - `field_type`：字段类型 / Field type
+/// - `attrs`：字段的属性列表 / Field attributes
+///
+/// # 返回值 / Returns
+///
+/// 返回校验语句的 `TokenStream` 列表。
+///
+/// Returns a list of validation `TokenStream` blocks.
+fn parse_validations(
+    field_name: &syn::Ident,
+    field_type: &Type,
+    attrs: &[Attribute],
+) -> Vec<proc_macro2::TokenStream> {
+    let mut validates = Vec::new();
+    for attr in attrs {
+        if attr.path().is_ident("afast") {
+            let nested = attr
+                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+                .unwrap();
+            for meta in nested {
+                match meta {
+                    Meta::List(meta) => {
+                        if meta.path.is_ident("gt") {
+                            let inner = meta.parse_args::<Range>().unwrap();
+                            let gt_value = inner.int.base10_parse::<i64>().unwrap();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            validates.push(quote! {
+                                if #field_name <= #gt_value {
+                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                }
+                            });
+                        } else if meta.path.is_ident("gte") {
+                            let inner = meta.parse_args::<Range>().unwrap();
+                            let gt_value = inner.int.base10_parse::<i64>().unwrap();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            validates.push(quote! {
+                                if #field_name < #gt_value {
+                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                }
+                            });
+                        } else if meta.path.is_ident("lt") {
+                            let inner = meta.parse_args::<Range>().unwrap();
+                            let lt_value = inner.int.base10_parse::<i64>().unwrap();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            validates.push(quote! {
+                                if #field_name >= #lt_value {
+                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                }
+                            });
+                        } else if meta.path.is_ident("lte") {
+                            let inner = meta.parse_args::<Range>().unwrap();
+                            let lt_value = inner.int.base10_parse::<i64>().unwrap();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            validates.push(quote! {
+                                if #field_name > #lt_value {
+                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                }
+                            });
+                        } else if meta.path.is_ident("len") {
+                            let field_is_option = match field_type {
+                                Type::Path(TypePath {
+                                    path: Path { segments, .. },
+                                    ..
+                                }) => {
+                                    segments.len() == 1 && segments[0].ident == "Option"
+                                }
+                                _ => false,
+                            };
+
+                            let inner = meta.parse_args::<Length>().unwrap();
+                            let min_value = inner.min.base10_parse::<i64>().unwrap();
+                            let max_value = inner.max.base10_parse::<i64>().unwrap();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            if min_value > max_value {
+                                panic!(
+                                    "Invalid validation: min value {} is greater than max value {} for field {}",
+                                    min_value, max_value, field_name
+                                );
+                            }
+                            if min_value < 0 && max_value < 0 {
+                                panic!(
+                                    "Invalid validation: both min and max values are negative for field {}",
+                                    field_name
+                                );
+                            } else if min_value < 0 {
+                                let max: usize = max_value.try_into().unwrap();
+                                validates.push(quote! {
+                                    if #field_name.len() > #max {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            } else if max_value < 0 {
+                                let min: usize = min_value.try_into().unwrap();
+                                validates.push(quote! {
+                                    if #field_name.len() < #min {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            } else {
+                                let min: usize = min_value.try_into().unwrap();
+                                let max: usize = max_value.try_into().unwrap();
+                                if field_is_option {
+                                    validates.push(quote! {
+                                        let length = match &#field_name {
+                                            Some(s) => {
+                                                let __length = s.len();
+                                                if __length < #min || __length > #max {
+                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                                }
+                                            },
+                                            None => {},
+                                        };
+                                    });
+                                } else {
+                                    validates.push(quote! {
+                                        if #field_name.len() < #min || #field_name.len() > #max {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    });
+                                }
+                            }
+                        } else if meta.path.is_ident("of") {
+                            let inner = meta.parse_args::<OfValidator>().unwrap();
+                            let allowed_values = inner.allowed_values.clone();
+                            let code = inner.code.base10_parse::<i64>().unwrap();
+                            let err_msg = inner
+                                .msg
+                                .value()
+                                .replace("${field}", &field_name.to_string());
+                            let values_tokens: Vec<_> = allowed_values
+                                .iter()
+                                .map(|v| v.to_token_stream())
+                                .collect();
+                            validates.push(quote! {
+                                if !matches!(#field_name, #(#values_tokens)|*) {
+                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                }
+                            });
+                        } else if meta.path.is_ident("func") {
+                            let inner = meta.parse_args::<LitStr>().unwrap();
+                            let ident =
+                                syn::parse_str::<syn::Ident>(&inner.value()).unwrap();
+                            let field = field_name.to_string();
+                            validates.push(quote! {
+                                match #ident(&#field_name, #field) {
+                                    Ok(()) => {},
+                                    Err(e) => return Err(e.to_afastdata_error()),
+                                }
+                            });
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    validates
+}
+
 /// 为结构体的字段生成反序列化代码以及构造表达式。内部辅助函数。
 ///
 /// Generates deserialization code for struct fields along with the construction
@@ -740,169 +933,7 @@ fn generate_deserialize_fields(
                 let ftype = &f.ty;
                 field_names.push(fname.clone());
 
-                let mut validates = Vec::new();
-                for attr in &f.attrs {
-                    if attr.path().is_ident("afast") {
-                        let nested = attr
-                            .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-                            .unwrap();
-                        for meta in nested {
-                            match meta {
-                                Meta::List(meta) => {
-                                    if meta.path.is_ident("gt") {
-                                        let inner = meta.parse_args::<Range>().unwrap();
-                                        let gt_value = inner.int.base10_parse::<i64>().unwrap();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        validates.push(quote! {
-                                            if #fname <= #gt_value {
-                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                            }
-                                        });
-                                    } else if meta.path.is_ident("gte") {
-                                        let inner = meta.parse_args::<Range>().unwrap();
-                                        let gt_value = inner.int.base10_parse::<i64>().unwrap();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        validates.push(quote! {
-                                            if #fname < #gt_value {
-                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                            }
-                                        });
-                                    } else if meta.path.is_ident("lt") {
-                                        let inner = meta.parse_args::<Range>().unwrap();
-                                        let lt_value = inner.int.base10_parse::<i64>().unwrap();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        validates.push(quote! {
-                                            if #fname >= #lt_value {
-                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                            }
-                                        });
-                                    } else if meta.path.is_ident("lte") {
-                                        let inner = meta.parse_args::<Range>().unwrap();
-                                        let lt_value = inner.int.base10_parse::<i64>().unwrap();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        validates.push(quote! {
-                                            if #fname > #lt_value {
-                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                            }
-                                        });
-                                    } else if meta.path.is_ident("len") {
-                                        let field_is_option = match ftype {
-                                            Type::Path(TypePath {
-                                                path: Path { segments, .. },
-                                                ..
-                                            }) => {
-                                                segments.len() == 1 && segments[0].ident == "Option"
-                                            }
-                                            _ => false,
-                                        };
-
-                                        let inner = meta.parse_args::<Length>().unwrap();
-                                        let min_value = inner.min.base10_parse::<i64>().unwrap();
-                                        let max_value = inner.max.base10_parse::<i64>().unwrap();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        if min_value > max_value {
-                                            panic!(
-                                                "Invalid validation: min value {} is greater than max value {} for field {}",
-                                                min_value, max_value, fname
-                                            );
-                                        }
-                                        if min_value < 0 && max_value < 0 {
-                                            panic!(
-                                                "Invalid validation: both min and max values are negative for field {}",
-                                                fname
-                                            );
-                                        } else if min_value < 0 {
-                                            let max: usize = max_value.try_into().unwrap();
-                                            validates.push(quote! {
-                                                if #fname.len() > #max {
-                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                                }
-                                            });
-                                        } else if max_value < 0 {
-                                            let min: usize = min_value.try_into().unwrap();
-                                            validates.push(quote! {
-                                                if #fname.len() < #min {
-                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                                }
-                                            });
-                                        } else {
-                                            let min: usize = min_value.try_into().unwrap();
-                                            let max: usize = max_value.try_into().unwrap();
-                                            if field_is_option {
-                                                validates.push(quote! {
-                                                    let length = match &#fname {  // 使用引用
-                                                        Some(s) => {
-                                                            let __length = s.len();
-                                                            if __length < #min || __length > #max {
-                                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                                            }
-                                                        },
-                                                        None => {},
-                                                    };
-                                                });
-                                            } else {
-                                                validates.push(quote! {
-                                                    if #fname.len() > #max {
-                                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    } else if meta.path.is_ident("of") {
-                                        let inner = meta.parse_args::<OfValidator>().unwrap();
-                                        let allowed_values = inner.allowed_values.clone();
-                                        let code = inner.code.base10_parse::<i64>().unwrap();
-                                        let err_msg = inner
-                                            .msg
-                                            .value()
-                                            .replace("${field}", &fname.to_string());
-                                        let values_tokens: Vec<_> = allowed_values
-                                            .iter()
-                                            .map(|v| v.to_token_stream())
-                                            .collect();
-                                        validates.push(quote! {
-                                            if !matches!(#fname, #(#values_tokens)|*) {
-                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                            }
-                                        });
-                                    } else if meta.path.is_ident("func") {
-                                        let inner = meta.parse_args::<LitStr>().unwrap();
-                                        let ident =
-                                            syn::parse_str::<syn::Ident>(&inner.value()).unwrap();
-                                        let field = fname.to_string();
-                                        validates.push(quote! {
-                                            match #ident(&#fname, #field) {
-                                                Ok(()) => {},
-                                                Err(e) => return Err(e.to_afastdata_error()),
-                                            }
-                                        });
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
+                let validates = parse_validations(fname, ftype, &f.attrs);
                 let (skip, default) = has_skip_attr(&f.attrs);
                 if skip {
                     if let Some(default) = default {

@@ -32,7 +32,7 @@
 
 mod error;
 
-pub use error::{Error, ValidateError};
+pub use error::{Error, ErrorKind, ValidateError};
 
 /// Re-export derive 宏。
 ///
