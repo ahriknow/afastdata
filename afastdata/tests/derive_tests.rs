@@ -710,3 +710,35 @@ fn test_unknown_variant_tag() {
     let err = SimpleEnum::from_bytes(&data).unwrap_err();
     assert!(format!("{}", err).contains("Unknown variant tag"));
 }
+
+// ==================== f64 校验测试 / f64 Validation Tests ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct FloatStruct {
+    #[afast(gte(0.0, 5001, "value must be >= 0.0"))]
+    #[afast(lte(100.0, 5002, "value must be <= 100.0"))]
+    score: f64,
+}
+
+#[test]
+fn test_f64_validation_valid() {
+    let s = FloatStruct { score: 50.5 };
+    roundtrip(&s);
+}
+
+#[test]
+fn test_f64_validation_error() {
+    use afastdata::ErrorKind;
+
+    // below minimum
+    let s = FloatStruct { score: -1.0 };
+    let bytes = s.to_bytes();
+    let err = FloatStruct::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(5001, _)));
+
+    // above maximum
+    let s = FloatStruct { score: 101.0 };
+    let bytes = s.to_bytes();
+    let err = FloatStruct::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(5002, _)));
+}

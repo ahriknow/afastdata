@@ -74,7 +74,7 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Attribute, Data, DeriveInput, Fields, Index, Lit, LitInt, LitStr, Meta, Path, Token, Type,
+    Attribute, Data, DeriveInput, Fields, Index, Lit, LitFloat, LitInt, LitStr, Meta, Path, Token, Type,
     TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
@@ -603,8 +603,22 @@ fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
     (false, None)
 }
 
+enum RangeValue {
+    Int(LitInt),
+    Float(LitFloat),
+}
+
+impl RangeValue {
+    fn to_token_stream(&self) -> proc_macro2::TokenStream {
+        match self {
+            RangeValue::Int(v) => quote! { #v },
+            RangeValue::Float(v) => quote! { #v },
+        }
+    }
+}
+
 struct Range {
-    int: LitInt,
+    value: RangeValue,
     _comma1: Token![,],
     code: LitInt,
     _comma2: Token![,],
@@ -613,8 +627,14 @@ struct Range {
 
 impl Parse for Range {
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        // Try to parse as float first, then as int
+        let value = if input.peek(LitFloat) {
+            RangeValue::Float(input.parse()?)
+        } else {
+            RangeValue::Int(input.parse()?)
+        };
         Ok(Range {
-            int: input.parse()?,
+            value,
             _comma1: input.parse()?,
             code: input.parse()?,
             _comma2: input.parse()?,
@@ -751,6 +771,72 @@ impl Parse for OfValidator {
     }
 }
 
+/// 检测字段类型是否为数值类型（i8..i128, u8..u128, f32, f64）。
+///
+/// Checks whether the field type is a numeric type.
+fn is_numeric_type(ty: &Type) -> bool {
+    if let Type::Path(TypePath { path, .. }) = ty {
+        if let Some(segment) = path.segments.last() {
+            let name = segment.ident.to_string();
+            return matches!(
+                name.as_str(),
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "i128"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "u128"
+                    | "f32"
+                    | "f64"
+            );
+        }
+    }
+    false
+}
+
+/// 检测字段类型是否为 Option<T>。
+///
+/// Checks whether the field type is `Option<T>`.
+fn is_option_type(ty: &Type) -> bool {
+    if let Type::Path(TypePath {
+        path: Path { segments, .. },
+        ..
+    }) = ty
+    {
+        segments.len() == 1 && segments[0].ident == "Option"
+    } else {
+        false
+    }
+}
+
+/// 检测字段类型是否为字符串或集合类型（String, &str, Vec<T>, [T; N]）。
+///
+/// Checks whether the field type is a string or collection type.
+fn is_collection_type(ty: &Type) -> bool {
+    if let Type::Path(TypePath { path, .. }) = ty {
+        if let Some(segment) = path.segments.last() {
+            let name = segment.ident.to_string();
+            return matches!(name.as_str(), "String" | "Vec" | "BTreeSet" | "BTreeMap" | "HashSet" | "HashMap");
+        }
+    }
+    // [T; N] arrays
+    if let Type::Array(_) = ty {
+        return true;
+    }
+    // &str
+    if let Type::Reference(r) = ty {
+        if let Type::Path(TypePath { path, .. }) = &*r.elem {
+            if let Some(segment) = path.segments.last() {
+                return segment.ident == "str";
+            }
+        }
+    }
+    false
+}
+
 /// 解析字段上的 `#[afast(...)]` 校验属性，生成校验代码。
 ///
 /// Parses `#[afast(...)]` validation attributes on a field and generates
@@ -787,6 +873,19 @@ fn parse_validations(
             for meta in nested {
                 if let Meta::List(meta) = meta {
                         if meta.path.is_ident("gt") {
+                            if !is_numeric_type(field_type) {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "validation `gt` is only supported on numeric types, but field `{}` is not",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
                             let inner = match meta.parse_args::<Range>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -794,16 +893,7 @@ fn parse_validations(
                                     continue;
                                 }
                             };
-                            let gt_value = match inner.int.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
+                            let cmp_value = inner.value.to_token_stream();
                             let code = match inner.code.base10_parse::<i64>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -819,11 +909,24 @@ fn parse_validations(
                                 .value()
                                 .replace("${field}", &field_name.to_string());
                             validates.push(quote! {
-                                if #field_name <= #gt_value {
+                                if #field_name <= #cmp_value {
                                     return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                 }
                             });
                         } else if meta.path.is_ident("gte") {
+                            if !is_numeric_type(field_type) {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "validation `gte` is only supported on numeric types, but field `{}` is not",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
                             let inner = match meta.parse_args::<Range>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -831,16 +934,7 @@ fn parse_validations(
                                     continue;
                                 }
                             };
-                            let gt_value = match inner.int.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
+                            let cmp_value = inner.value.to_token_stream();
                             let code = match inner.code.base10_parse::<i64>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -856,11 +950,24 @@ fn parse_validations(
                                 .value()
                                 .replace("${field}", &field_name.to_string());
                             validates.push(quote! {
-                                if #field_name < #gt_value {
+                                if #field_name < #cmp_value {
                                     return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                 }
                             });
                         } else if meta.path.is_ident("lt") {
+                            if !is_numeric_type(field_type) {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "validation `lt` is only supported on numeric types, but field `{}` is not",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
                             let inner = match meta.parse_args::<Range>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -868,16 +975,7 @@ fn parse_validations(
                                     continue;
                                 }
                             };
-                            let lt_value = match inner.int.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
+                            let cmp_value = inner.value.to_token_stream();
                             let code = match inner.code.base10_parse::<i64>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -893,11 +991,24 @@ fn parse_validations(
                                 .value()
                                 .replace("${field}", &field_name.to_string());
                             validates.push(quote! {
-                                if #field_name >= #lt_value {
+                                if #field_name >= #cmp_value {
                                     return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                 }
                             });
                         } else if meta.path.is_ident("lte") {
+                            if !is_numeric_type(field_type) {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "validation `lte` is only supported on numeric types, but field `{}` is not",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
                             let inner = match meta.parse_args::<Range>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -905,16 +1016,7 @@ fn parse_validations(
                                     continue;
                                 }
                             };
-                            let lt_value = match inner.int.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.int, format!("invalid integer value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
+                            let cmp_value = inner.value.to_token_stream();
                             let code = match inner.code.base10_parse::<i64>() {
                                 Ok(v) => v,
                                 Err(e) => {
@@ -930,20 +1032,29 @@ fn parse_validations(
                                 .value()
                                 .replace("${field}", &field_name.to_string());
                             validates.push(quote! {
-                                if #field_name > #lt_value {
+                                if #field_name > #cmp_value {
                                     return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                 }
                             });
                         } else if meta.path.is_ident("len") {
-                            let field_is_option = match field_type {
-                                Type::Path(TypePath {
-                                    path: Path { segments, .. },
-                                    ..
-                                }) => {
-                                    segments.len() == 1 && segments[0].ident == "Option"
-                                }
-                                _ => false,
-                            };
+                            let field_is_option = is_option_type(field_type);
+                            // For Option<T>, check if inner type is a collection
+                            // For non-Option, check directly
+                            if field_is_option {
+                                // Option<T> is allowed - inner type check is deferred to runtime
+                            } else if !is_collection_type(field_type) {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &meta.path,
+                                        format!(
+                                            "validation `len` is only supported on String, &[u8], Vec<T>, [T; N], or Option<T> wrapping these types, but field `{}` is not",
+                                            field_name
+                                        ),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
 
                             let inner = match meta.parse_args::<Length>() {
                                 Ok(v) => v,

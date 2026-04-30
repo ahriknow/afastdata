@@ -208,13 +208,15 @@ fn main() {
 校验规则适用于结构体字段和枚举变体字段（命名字段和元组变体）：
 
 - `skip` or `skip(default)`：跳过此字段的序列化和反序列化，并使用默认值（调用传入的 default 函数或者给字段类型实现 Default trait）
-- `gt(value, code, message)`：字段值必须大于 `value`，否则返回 `ValidateError`
-- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`
-- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`
-- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`
-- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），字段类型 T 或者 Option<T> 中的 T 必须有 len():usize 方法，否则返回 `ValidateError`
+- `gt(value, code, message)`：字段值必须大于 `value`（支持整数和浮点数），否则返回 `ValidateError`。仅适用于数值类型
+- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`。仅适用于数值类型
+- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`。仅适用于数值类型
+- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`。仅适用于数值类型
+- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），适用于 `String`、`Vec<T>`、`[T; N]`、`Option<T>` 包裹的上述类型，否则返回 `ValidateError`
 - `of([v1, v2, ...], code, message)`：字段值必须在 `[v1, v2, ...]` 列表中，否则返回 `ValidateError`
 - `func(name)`：调用外部函数 `name` 进行校验，函数签名为 `fn(value: &T, field: &str) -> Result<(), ValidateError>`，返回 `Ok(())` 则校验通过，否则返回 `ValidateError`
+
+> **类型检查**：校验规则在编译期检查字段类型兼容性。例如 `gt`/`gte`/`lt`/`lte` 只能用于数值类型，`len` 只能用于字符串和集合类型。不兼容的组合会产生编译错误。
 
 ## 支持的类型
 

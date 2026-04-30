@@ -208,13 +208,15 @@ fn main() {
 Validation rules apply to both struct fields and enum variant fields (named and tuple variants):
 
 - `skip` or `skip(default)`: skip this field's serialization and deserialization, and use default value (calling the default function or implementing Default trait for the field type)
-- `gt(value, code, message)`: field value must be greater than `value`, otherwise return `ValidateError`
-- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`
-- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`
-- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`
-- `len(min, max, code, message)`: field length must be between `min` and `max`, field type T or T in Option<T> must impl len():usize function, otherwise return `ValidateError`
+- `gt(value, code, message)`: field value must be greater than `value` (supports integer and float literals), otherwise return `ValidateError`. Only applicable to numeric types
+- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`. Only applicable to numeric types
+- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`. Only applicable to numeric types
+- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`. Only applicable to numeric types
+- `len(min, max, code, message)`: field length must be between `min` and `max`, applicable to `String`, `Vec<T>`, `[T; N]`, or `Option<T>` wrapping these types, otherwise return `ValidateError`
 - `of([v1, v2, ...], code, message)`: field value must be one of `[v1, v2, ...]`, otherwise return `ValidateError`
 - `func(name)`: call external function `name` to perform validation, signature `fn(value: &T, field: &str) -> Result<(), ValidateError>`, return `Ok(())` if validation passes, otherwise return `ValidateError`
+
+> **Type checking**: Validation rules check field type compatibility at compile time. For example, `gt`/`gte`/`lt`/`lte` can only be used on numeric types, and `len` can only be used on string and collection types. Incompatible combinations produce a compile error.
 
 ## Supported Types
 
