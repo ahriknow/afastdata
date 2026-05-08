@@ -21,6 +21,13 @@ fn test_integers() {
 }
 
 #[test]
+fn test_usize() {
+    roundtrip(&0usize);
+    roundtrip(&42usize);
+    roundtrip(&usize::MAX);
+}
+
+#[test]
 fn test_floats() {
     roundtrip(&3.14f32);
     roundtrip(&2.718281828f64);

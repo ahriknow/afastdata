@@ -3,8 +3,8 @@ members = ["afastdata-macro", "afastdata"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 
 [workspace.dependencies]
-afastdata-macro = { path = "afastdata-macro", version = "0.0.5" }
+afastdata-macro = { path = "afastdata-macro", version = "0.0.6" }

@@ -27,14 +27,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.4"
+afastdata = "0.0.6"
 ```
 
 如需 `u64` 长度前缀或自定义枚举标签类型：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.4", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.6", features = ["len-u64", "tag-u16"] }
 ```
 
 ### 基本用法
@@ -208,15 +208,15 @@ fn main() {
 校验规则适用于结构体字段和枚举变体字段（命名字段和元组变体）：
 
 - `skip` or `skip(default)`：跳过此字段的序列化和反序列化，并使用默认值（调用传入的 default 函数或者给字段类型实现 Default trait）
-- `gt(value, code, message)`：字段值必须大于 `value`（支持整数和浮点数），否则返回 `ValidateError`。仅适用于数值类型
-- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`。仅适用于数值类型
-- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`。仅适用于数值类型
-- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`。仅适用于数值类型
-- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），适用于 `String`、`Vec<T>`、`[T; N]`、`Option<T>` 包裹的上述类型，否则返回 `ValidateError`
+- `gt(value, code, message)`：字段值必须大于 `value`（支持整数和浮点数），否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`（`None` 视为通过）
+- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
+- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
+- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
+- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），适用于 `String`、`Vec<T>`、`[T; N]`、`Option<T>` 包裹的上述类型（`None` 视为通过）。`min` 或 `max` 传 `-1` 表示不限制该边界，例如 `len(3, -1, ...)` 表示最小长度 3，无最大限制
 - `of([v1, v2, ...], code, message)`：字段值必须在 `[v1, v2, ...]` 列表中，否则返回 `ValidateError`
 - `func(name)`：调用外部函数 `name` 进行校验，函数签名为 `fn(value: &T, field: &str) -> Result<(), ValidateError>`，返回 `Ok(())` 则校验通过，否则返回 `ValidateError`
 
-> **类型检查**：校验规则在编译期检查字段类型兼容性。例如 `gt`/`gte`/`lt`/`lte` 只能用于数值类型，`len` 只能用于字符串和集合类型。不兼容的组合会产生编译错误。
+> **类型检查**：校验规则在编译期检查字段类型兼容性。例如 `gt`/`gte`/`lt`/`lte` 只能用于数值类型或 `Option<数值类型>`，`len` 只能用于字符串和集合类型。不兼容的组合会产生编译错误。
 
 ## 支持的类型
 
@@ -226,6 +226,7 @@ fn main() {
 | `i16`, `u16` | little-endian | 2 |
 | `i32`, `u32` | little-endian | 4 |
 | `i64`, `u64` | little-endian | 8 |
+| `usize` | u64 little-endian（跨平台兼容） | 8 |
 | `i128`, `u128` | little-endian | 16 |
 | `f32` | IEEE 754 little-endian | 4 |
 | `f64` | IEEE 754 little-endian | 8 |

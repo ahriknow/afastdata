@@ -27,14 +27,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.4"
+afastdata = "0.0.6"
 ```
 
 For `u64` length prefix or custom enum tag type:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.4", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.6", features = ["len-u64", "tag-u16"] }
 ```
 
 ### Basic Usage
@@ -208,15 +208,15 @@ fn main() {
 Validation rules apply to both struct fields and enum variant fields (named and tuple variants):
 
 - `skip` or `skip(default)`: skip this field's serialization and deserialization, and use default value (calling the default function or implementing Default trait for the field type)
-- `gt(value, code, message)`: field value must be greater than `value` (supports integer and float literals), otherwise return `ValidateError`. Only applicable to numeric types
-- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`. Only applicable to numeric types
-- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`. Only applicable to numeric types
-- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`. Only applicable to numeric types
-- `len(min, max, code, message)`: field length must be between `min` and `max`, applicable to `String`, `Vec<T>`, `[T; N]`, or `Option<T>` wrapping these types, otherwise return `ValidateError`
+- `gt(value, code, message)`: field value must be greater than `value` (supports integer and float literals), otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>` (`None` passes validation)
+- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `len(min, max, code, message)`: field length must be between `min` and `max`, applicable to `String`, `Vec<T>`, `[T; N]`, or `Option<T>` wrapping these types (`None` passes validation). Pass `-1` for `min` or `max` to leave that bound unrestricted, e.g. `len(3, -1, ...)` means min length 3 with no max limit
 - `of([v1, v2, ...], code, message)`: field value must be one of `[v1, v2, ...]`, otherwise return `ValidateError`
 - `func(name)`: call external function `name` to perform validation, signature `fn(value: &T, field: &str) -> Result<(), ValidateError>`, return `Ok(())` if validation passes, otherwise return `ValidateError`
 
-> **Type checking**: Validation rules check field type compatibility at compile time. For example, `gt`/`gte`/`lt`/`lte` can only be used on numeric types, and `len` can only be used on string and collection types. Incompatible combinations produce a compile error.
+> **Type checking**: Validation rules check field type compatibility at compile time. For example, `gt`/`gte`/`lt`/`lte` can only be used on numeric types or `Option<numeric>`, and `len` can only be used on string and collection types. Incompatible combinations produce a compile error.
 
 ## Supported Types
 
@@ -226,6 +226,7 @@ Validation rules apply to both struct fields and enum variant fields (named and 
 | `i16`, `u16` | little-endian | 2 bytes |
 | `i32`, `u32` | little-endian | 4 bytes |
 | `i64`, `u64` | little-endian | 8 bytes |
+| `usize` | u64 little-endian (cross-platform) | 8 bytes |
 | `i128`, `u128` | little-endian | 16 bytes |
 | `f32` | IEEE 754 little-endian | 4 bytes |
 | `f64` | IEEE 754 little-endian | 8 bytes |

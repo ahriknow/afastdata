@@ -789,6 +789,7 @@ fn is_numeric_type(ty: &Type) -> bool {
                     | "u32"
                     | "u64"
                     | "u128"
+                    | "usize"
                     | "f32"
                     | "f64"
             );
@@ -810,6 +811,40 @@ fn is_option_type(ty: &Type) -> bool {
     } else {
         false
     }
+}
+
+/// 提取 Option<T> 的内部类型 T。
+///
+/// Extracts the inner type `T` from `Option<T>`.
+fn extract_option_inner(ty: &Type) -> Option<&Type> {
+    if let Type::Path(TypePath {
+        path: Path { segments, .. },
+        ..
+    }) = ty
+    {
+        if segments.len() == 1 && segments[0].ident == "Option" {
+            if let syn::PathArguments::AngleBracketed(args) = &segments[0].arguments {
+                if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
+                    return Some(inner);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// 检测字段类型是否为可进行比较校验的类型（数值类型或 Option<数值类型>）。
+///
+/// Checks whether the field type supports comparison validation
+/// (numeric type or Option<numeric type>).
+fn is_comparable_type(ty: &Type) -> bool {
+    if is_numeric_type(ty) {
+        return true;
+    }
+    if let Some(inner) = extract_option_inner(ty) {
+        return is_numeric_type(inner);
+    }
+    false
 }
 
 /// 检测字段类型是否为字符串或集合类型（String, &str, Vec<T>, [T; N]）。
@@ -873,12 +908,12 @@ fn parse_validations(
             for meta in nested {
                 if let Meta::List(meta) = meta {
                         if meta.path.is_ident("gt") {
-                            if !is_numeric_type(field_type) {
+                            if !is_comparable_type(field_type) {
                                 validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
-                                            "validation `gt` is only supported on numeric types, but field `{}` is not",
+                                            "validation `gt` is only supported on numeric types or Option<numeric>, but field `{}` is not",
                                             field_name
                                         ),
                                     )
@@ -908,18 +943,28 @@ fn parse_validations(
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
-                            validates.push(quote! {
-                                if #field_name <= #cmp_value {
-                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                }
-                            });
+                            if is_option_type(field_type) {
+                                validates.push(quote! {
+                                    if let Some(ref __val) = #field_name {
+                                        if *__val <= #cmp_value {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    }
+                                });
+                            } else {
+                                validates.push(quote! {
+                                    if #field_name <= #cmp_value {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            }
                         } else if meta.path.is_ident("gte") {
-                            if !is_numeric_type(field_type) {
+                            if !is_comparable_type(field_type) {
                                 validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
-                                            "validation `gte` is only supported on numeric types, but field `{}` is not",
+                                            "validation `gte` is only supported on numeric types (or Option<numeric>), but field `{}` is not",
                                             field_name
                                         ),
                                     )
@@ -949,18 +994,28 @@ fn parse_validations(
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
-                            validates.push(quote! {
-                                if #field_name < #cmp_value {
-                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                }
-                            });
+                            if is_option_type(field_type) {
+                                validates.push(quote! {
+                                    if let Some(ref __val) = #field_name {
+                                        if *__val < #cmp_value {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    }
+                                });
+                            } else {
+                                validates.push(quote! {
+                                    if #field_name < #cmp_value {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            }
                         } else if meta.path.is_ident("lt") {
-                            if !is_numeric_type(field_type) {
+                            if !is_comparable_type(field_type) {
                                 validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
-                                            "validation `lt` is only supported on numeric types, but field `{}` is not",
+                                            "validation `lt` is only supported on numeric types (or Option<numeric>), but field `{}` is not",
                                             field_name
                                         ),
                                     )
@@ -990,18 +1045,28 @@ fn parse_validations(
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
-                            validates.push(quote! {
-                                if #field_name >= #cmp_value {
-                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                }
-                            });
+                            if is_option_type(field_type) {
+                                validates.push(quote! {
+                                    if let Some(ref __val) = #field_name {
+                                        if *__val >= #cmp_value {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    }
+                                });
+                            } else {
+                                validates.push(quote! {
+                                    if #field_name >= #cmp_value {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            }
                         } else if meta.path.is_ident("lte") {
-                            if !is_numeric_type(field_type) {
+                            if !is_comparable_type(field_type) {
                                 validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
-                                            "validation `lte` is only supported on numeric types, but field `{}` is not",
+                                            "validation `lte` is only supported on numeric types (or Option<numeric>), but field `{}` is not",
                                             field_name
                                         ),
                                     )
@@ -1031,11 +1096,21 @@ fn parse_validations(
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
-                            validates.push(quote! {
-                                if #field_name > #cmp_value {
-                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                }
-                            });
+                            if is_option_type(field_type) {
+                                validates.push(quote! {
+                                    if let Some(ref __val) = #field_name {
+                                        if *__val > #cmp_value {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    }
+                                });
+                            } else {
+                                validates.push(quote! {
+                                    if #field_name > #cmp_value {
+                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                    }
+                                });
+                            }
                         } else if meta.path.is_ident("len") {
                             let field_is_option = is_option_type(field_type);
                             // For Option<T>, check if inner type is a collection
@@ -1097,7 +1172,8 @@ fn parse_validations(
                                 .msg
                                 .value()
                                 .replace("${field}", &field_name.to_string());
-                            if min_value > max_value {
+                            // -1 is a sentinel meaning "no limit", so skip range check when either is -1
+                            if min_value >= 0 && max_value >= 0 && min_value > max_value {
                                 validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
@@ -1133,11 +1209,21 @@ fn parse_validations(
                                         continue;
                                     }
                                 };
-                                validates.push(quote! {
-                                    if #field_name.len() > #max {
-                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                    }
-                                });
+                                if field_is_option {
+                                    validates.push(quote! {
+                                        if let Some(ref __val) = #field_name {
+                                            if __val.len() > #max {
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    validates.push(quote! {
+                                        if #field_name.len() > #max {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    });
+                                }
                             } else if max_value < 0 {
                                 let min: usize = match min_value.try_into() {
                                     Ok(v) => v,
@@ -1149,11 +1235,21 @@ fn parse_validations(
                                         continue;
                                     }
                                 };
-                                validates.push(quote! {
-                                    if #field_name.len() < #min {
-                                        return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                    }
-                                });
+                                if field_is_option {
+                                    validates.push(quote! {
+                                        if let Some(ref __val) = #field_name {
+                                            if __val.len() < #min {
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    validates.push(quote! {
+                                        if #field_name.len() < #min {
+                                            return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                        }
+                                    });
+                                }
                             } else {
                                 let min: usize = match min_value.try_into() {
                                     Ok(v) => v,

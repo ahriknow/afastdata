@@ -13,6 +13,7 @@
 //! | `i16`, `u16` | 2 字节 little-endian / 2 bytes little-endian |
 //! | `i32`, `u32` | 4 字节 little-endian / 4 bytes little-endian |
 //! | `i64`, `u64` | 8 字节 little-endian / 8 bytes little-endian |
+//! | `usize` | u64 little-endian（跨平台兼容）/ u64 little-endian (cross-platform) |
 //! | `i128`, `u128` | 16 字节 little-endian / 16 bytes little-endian |
 //! | `f32` | 4 字节 IEEE 754 / 4 bytes IEEE 754 |
 //! | `f64` | 8 字节 IEEE 754 / 8 bytes IEEE 754 |
@@ -210,6 +211,25 @@ impl_serialize_int!(i128, 16);
 impl_serialize_int!(u128, 16);
 impl_serialize_int!(f32, 4);
 impl_serialize_int!(f64, 8);
+
+// ==================== usize ====================
+
+/// `usize` 序列化为 8 字节 `u64` little-endian，确保跨平台兼容性。
+///
+/// `usize` is serialized as 8-byte `u64` little-endian for cross-platform compatibility.
+impl AFastSerialize for usize {
+    fn to_bytes(&self) -> Vec<u8> {
+        (*self as u64).to_le_bytes().to_vec()
+    }
+}
+
+impl AFastDeserialize for usize {
+    fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
+        let bytes = read_exact(data, 0, 8)?;
+        let arr: [u8; 8] = bytes.try_into().unwrap();
+        Ok((u64::from_le_bytes(arr) as usize, 8))
+    }
+}
 
 // ==================== bool ====================
 

@@ -591,6 +591,54 @@ fn test_option_len_validation_fail() {
     assert!(matches!(err.kind(), ErrorKind::ValidateError(2001, _)));
 }
 
+// ==================== Option + Len 边界情况 / Option Len Edge Cases ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct OptionLenEdge {
+    #[afast(len(3, -1, 2101, "${field} must be >= 3 chars"))]
+    min_only: Option<String>,
+    #[afast(len(-1, 5, 2102, "${field} must be <= 5 chars"))]
+    max_only: Option<String>,
+}
+
+#[test]
+fn test_option_len_edge_pass() {
+    roundtrip(&OptionLenEdge {
+        min_only: Some(String::from("hello")),
+        max_only: Some(String::from("hi")),
+    });
+    roundtrip(&OptionLenEdge {
+        min_only: None,
+        max_only: None,
+    });
+    roundtrip(&OptionLenEdge {
+        min_only: Some(String::from("abc")),
+        max_only: Some(String::from("abcde")),
+    });
+}
+
+#[test]
+fn test_option_len_edge_fail_min_only() {
+    let v = OptionLenEdge {
+        min_only: Some(String::from("ab")),
+        max_only: None,
+    };
+    let bytes = v.to_bytes();
+    let err = OptionLenEdge::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(2101, _)));
+}
+
+#[test]
+fn test_option_len_edge_fail_max_only() {
+    let v = OptionLenEdge {
+        min_only: None,
+        max_only: Some(String::from("abcdef")),
+    };
+    let bytes = v.to_bytes();
+    let err = OptionLenEdge::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(2102, _)));
+}
+
 // ==================== 枚举变体校验 / Enum Variant Validation ====================
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
@@ -741,4 +789,127 @@ fn test_f64_validation_error() {
     let bytes = s.to_bytes();
     let err = FloatStruct::from_bytes(&bytes).unwrap_err();
     assert!(matches!(err.kind(), ErrorKind::ValidateError(5002, _)));
+}
+
+// ==================== Option<numeric> 校验测试 / Option<numeric> Validation Tests ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct OptionNumeric {
+    #[afast(gte(0, 6001, "value must be >= 0"))]
+    #[afast(lte(100, 6002, "value must be <= 100"))]
+    val: Option<i64>,
+
+    #[afast(gt(0.0, 6003, "score must be > 0.0"))]
+    #[afast(lt(1000.0, 6004, "score must be < 1000.0"))]
+    score: Option<f64>,
+}
+
+#[test]
+fn test_option_numeric_pass_some() {
+    roundtrip(&OptionNumeric {
+        val: Some(50),
+        score: Some(123.45),
+    });
+}
+
+#[test]
+fn test_option_numeric_pass_none() {
+    roundtrip(&OptionNumeric {
+        val: None,
+        score: None,
+    });
+}
+
+#[test]
+fn test_option_numeric_fail_gte() {
+    let v = OptionNumeric {
+        val: Some(-1),
+        score: None,
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6001, _)));
+}
+
+#[test]
+fn test_option_numeric_fail_lte() {
+    let v = OptionNumeric {
+        val: Some(101),
+        score: None,
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6002, _)));
+}
+
+#[test]
+fn test_option_numeric_fail_gt() {
+    // 0.0 is not > 0.0
+    let v = OptionNumeric {
+        val: None,
+        score: Some(0.0),
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6003, _)));
+}
+
+#[test]
+fn test_option_numeric_fail_lt() {
+    // 1000.0 is not < 1000.0
+    let v = OptionNumeric {
+        val: None,
+        score: Some(1000.0),
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6004, _)));
+}
+
+#[test]
+fn test_option_numeric_fail_gt_with_value() {
+    // 0.0 is not > 0.0
+    let v = OptionNumeric {
+        val: Some(50),
+        score: Some(0.0),
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6003, _)));
+}
+
+#[test]
+fn test_option_numeric_fail_lt_with_value() {
+    // 1500.0 is not < 1000.0
+    let v = OptionNumeric {
+        val: Some(50),
+        score: Some(1500.0),
+    };
+    let bytes = v.to_bytes();
+    let err = OptionNumeric::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(6004, _)));
+}
+
+// ==================== usize 校验测试 / usize Validation Tests ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct UsizeStruct {
+    #[afast(gte(0, 7001, "count must be >= 0"))]
+    #[afast(lte(100, 7002, "count must be <= 100"))]
+    count: usize,
+}
+
+#[test]
+fn test_usize_validation_pass() {
+    roundtrip(&UsizeStruct { count: 50 });
+    roundtrip(&UsizeStruct { count: 0 });
+    roundtrip(&UsizeStruct { count: 100 });
+}
+
+#[test]
+fn test_usize_validation_fail() {
+    let v = UsizeStruct { count: 101 };
+    let bytes = v.to_bytes();
+    let err = UsizeStruct::from_bytes(&bytes).unwrap_err();
+    assert!(matches!(err.kind(), ErrorKind::ValidateError(7002, _)));
 }
