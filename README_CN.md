@@ -28,14 +28,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.7"
+afastdata = "0.0.8"
 ```
 
 如需 `u64` 长度前缀或自定义枚举标签类型：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.7", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.8", features = ["len-u64", "tag-u16"] }
 ```
 
 ### 基本用法
@@ -169,7 +169,7 @@ fn d() -> i64 {
 校验规则适用于结构体字段和枚举变体字段（命名字段和元组变体）：
 
 - `skip` 或 `skip("default_fn")`：跳过此字段的序列化和反序列化。反序列化时使用默认值（调用传入的函数或字段类型的 `Default::default()`）
-- `skip_with("marker")` 或 `skip_with("marker", "default_fn")`：条件跳过。当 `to_bytes_with` / `from_bytes_with` 传入的 marker 与字段上的 marker 匹配时，该字段被跳过。不匹配时正常序列化/反序列化
+- `skip_with("marker")` 或 `skip_with("marker", "default_fn")`：条件跳过。当 `to_bytes_with` / `from_bytes_with` 传入的 marker 与字段上的 marker 匹配时，该字段被跳过。不匹配时正常序列化/反序列化。marker 会自动传播到嵌套类型——如果某个结构体字段包含另一个带有 `skip_with` 字段的结构体，内部字段也会响应同一个 marker
 - `gt(value, code, message)`：字段值必须大于 `value`（支持整数和浮点数），否则返回 `ValidateError`
 - `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`
 - `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`
@@ -223,7 +223,69 @@ fn main() {
 `to_bytes_with(marker)` 和 `from_bytes_with(data, marker)` 接受一个 marker 字符串：
 - marker 与字段 `skip_with` 的标记匹配时：序列化跳过该字段，反序列化用默认值/自定义函数填充
 - marker 不匹配时：行为与 `to_bytes()` / `from_bytes()` 完全一致
+- **嵌套传播** — 使用 `_with` 方法序列化/反序列化时，marker 会自动传播到所有嵌套类型。如果内部结构体也有 `skip_with` 字段，它们会响应同一个 marker
 - 对基本类型（`i32`、`String`、`Vec<T>` 等），`_with` 方法默认实现直接调用普通方法
+
+### 嵌套类型示例
+
+`skip_with` 在嵌套结构体之间自动生效，无需特殊配置：
+
+```rust
+use afastdata::{AFastSerialize, AFastDeserialize};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, Default, PartialEq)]
+struct Inner {
+    id: u32,
+    #[afast(skip_with("cache"))]
+    data: Vec<u8>,
+    name: String,
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Outer {
+    header: u32,
+    inner: Inner,
+    footer: u32,
+}
+
+fn main() {
+    let outer = Outer {
+        header: 1,
+        inner: Inner {
+            id: 42,
+            data: vec![1, 2, 3, 4, 5],
+            name: String::from("test"),
+        },
+        footer: 99,
+    };
+
+    // 完整序列化——包含 inner.data
+    let full = outer.to_bytes();
+
+    // 条件序列化——inner.data 通过 marker 传播被跳过
+    let cached = outer.to_bytes_with("cache");
+    assert!(cached.len() < full.len());
+
+    // 条件反序列化——inner.data 用 Default::default() 填充
+    let (decoded, _) = Outer::from_bytes_with(&cached, "cache").unwrap();
+    assert_eq!(decoded.inner.id, 42);
+    assert_eq!(decoded.inner.data, Vec::new());
+    assert_eq!(decoded.inner.name, String::from("test"));
+}
+```
+
+## 字段名安全性
+
+生成代码中的所有内部变量均以 `__afast_` 为前缀，避免与用户字段名冲突。可以安全使用 `data`、`offset`、`bytes` 等名称作为字段名：
+
+```rust
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Record {
+    data: Vec<u8>,    // 不会与内部 data 参数冲突
+    offset: u64,      // 不会与内部 offset 变量冲突
+    bytes: String,    // 不会与内部 bytes 变量冲突
+}
+```
 
 ## 支持的类型
 

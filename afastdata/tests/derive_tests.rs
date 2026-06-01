@@ -1119,3 +1119,91 @@ fn test_skip_and_skip_with_coexistence() {
     assert_eq!(decoded.cacheable, String::from("cached"));
     assert_eq!(decoded.name, String::from("test"));
 }
+
+// ==================== skip_with 嵌套类型 / skip_with Nested Types ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, Default, PartialEq)]
+struct Inner {
+    id: u32,
+    #[afast(skip_with("cache"))]
+    data: Vec<u8>,
+    name: String,
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Outer {
+    header: u32,
+    inner: Inner,
+    footer: u32,
+}
+
+#[test]
+fn test_skip_with_nested_struct() {
+    let outer = Outer {
+        header: 1,
+        inner: Inner {
+            id: 42,
+            data: vec![1, 2, 3, 4, 5],
+            name: String::from("test"),
+        },
+        footer: 99,
+    };
+
+    // Full serialization
+    let full = outer.to_bytes();
+    let (decoded, _) = Outer::from_bytes(&full).unwrap();
+    assert_eq!(outer, decoded);
+
+    // Conditional serialization with marker "cache"
+    // inner.data should be skipped because Inner has skip_with("cache") on data
+    let cached = outer.to_bytes_with("cache");
+    assert!(
+        cached.len() < full.len(),
+        "cached bytes should be shorter than full bytes"
+    );
+
+    // Deserialize with marker
+    let (decoded, _) = Outer::from_bytes_with(&cached, "cache").unwrap();
+    assert_eq!(decoded.header, 1);
+    assert_eq!(decoded.inner.id, 42);
+    assert_eq!(decoded.inner.data, Vec::<u8>::new()); // Default::default()
+    assert_eq!(decoded.inner.name, String::from("test"));
+    assert_eq!(decoded.footer, 99);
+
+    // Conditional serialization with non-matching marker
+    let other = outer.to_bytes_with("other");
+    assert_eq!(
+        other, full,
+        "non-matching marker should produce same bytes as full"
+    );
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct InnerTuple(u32, #[afast(skip_with("hidden"))] String, bool);
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct OuterTuple {
+    tag: u8,
+    inner: InnerTuple,
+}
+
+#[test]
+fn test_skip_with_nested_tuple_struct() {
+    let outer = OuterTuple {
+        tag: 5,
+        inner: InnerTuple(10, String::from("secret"), true),
+    };
+
+    let full = outer.to_bytes();
+    let (decoded, _) = OuterTuple::from_bytes(&full).unwrap();
+    assert_eq!(outer, decoded);
+
+    let hidden = outer.to_bytes_with("hidden");
+    assert!(hidden.len() < full.len());
+
+    let (decoded, _) = OuterTuple::from_bytes_with(&hidden, "hidden").unwrap();
+    assert_eq!(decoded.tag, 5);
+    assert_eq!(decoded.inner.0, 10);
+    assert_eq!(decoded.inner.1, String::new()); // Default::default()
+    assert_eq!(decoded.inner.2, true);
+}

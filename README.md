@@ -28,14 +28,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.7"
+afastdata = "0.0.8"
 ```
 
 For `u64` length prefix or custom enum tag type:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.7", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.8", features = ["len-u64", "tag-u16"] }
 ```
 
 ### Basic Usage
@@ -209,7 +209,7 @@ fn main() {
 Validation rules apply to both struct fields and enum variant fields (named and tuple variants):
 
 - `skip` or `skip("default_fn")` — Always skip this field during serialization and deserialization. On deserialize, fill with default value (call the given function, or `Default::default()`)
-- `skip_with("marker")` or `skip_with("marker", "default_fn")` — Conditionally skip. When the marker passed to `to_bytes_with` / `from_bytes_with` matches this field's marker, the field is skipped. Otherwise it is serialized/deserialized normally
+- `skip_with("marker")` or `skip_with("marker", "default_fn")` — Conditionally skip. When the marker passed to `to_bytes_with` / `from_bytes_with` matches this field's marker, the field is skipped. Otherwise it is serialized/deserialized normally. The marker automatically propagates to nested types — if a struct field contains another struct with `skip_with` fields, those inner fields also respond to the same marker
 - `gt(value, code, message)`: field value must be greater than `value` (supports integer and float literals), otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>` (`None` passes validation)
 - `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
 - `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
@@ -264,7 +264,69 @@ fn main() {
 
 - **Marker matches** the field's `skip_with` tag → serialize skips the field; deserialize fills with default value or custom function
 - **Marker does not match** → behavior is identical to `to_bytes()` / `from_bytes()`
+- **Nested propagation** — when serializing/deserializing a struct with `_with` methods, the marker automatically propagates to all nested types. If an inner struct also has `skip_with` fields, they will respond to the same marker
 - For primitive types (`i32`, `String`, `Vec<T>`, etc.), the `_with` methods default to calling the regular methods
+
+### Nested Type Example
+
+`skip_with` works automatically across nested structs — no special configuration needed:
+
+```rust
+use afastdata::{AFastSerialize, AFastDeserialize};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, Default, PartialEq)]
+struct Inner {
+    id: u32,
+    #[afast(skip_with("cache"))]
+    data: Vec<u8>,
+    name: String,
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Outer {
+    header: u32,
+    inner: Inner,
+    footer: u32,
+}
+
+fn main() {
+    let outer = Outer {
+        header: 1,
+        inner: Inner {
+            id: 42,
+            data: vec![1, 2, 3, 4, 5],
+            name: String::from("test"),
+        },
+        footer: 99,
+    };
+
+    // Full serialization — includes inner.data
+    let full = outer.to_bytes();
+
+    // Conditional — inner.data is skipped via marker propagation
+    let cached = outer.to_bytes_with("cache");
+    assert!(cached.len() < full.len());
+
+    // Deserialize — inner.data is filled with Default::default()
+    let (decoded, _) = Outer::from_bytes_with(&cached, "cache").unwrap();
+    assert_eq!(decoded.inner.id, 42);
+    assert_eq!(decoded.inner.data, Vec::new());
+    assert_eq!(decoded.inner.name, String::from("test"));
+}
+```
+
+## Field Name Safety
+
+All internal variables in generated code are prefixed with `__afast_` to avoid conflicts with your field names. You can safely use field names like `data`, `offset`, or `bytes` without any issues:
+
+```rust
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Record {
+    data: Vec<u8>,    // No conflict with internal `data` parameter
+    offset: u64,      // No conflict with internal `offset` variable
+    bytes: String,    // No conflict with internal `bytes` variable
+}
+```
 
 ## Supported Types
 

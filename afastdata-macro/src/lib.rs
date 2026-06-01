@@ -190,14 +190,14 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
             quote! {
                 impl #impl_generics ::afastdata::AFastSerialize for #name #ty_generics {
                     fn to_bytes(&self) -> Vec<u8> {
-                        let mut bytes = Vec::new();
+                        let mut __afast_bytes__ = Vec::new();
                         #(#serialize_body)*
-                        bytes
+                        __afast_bytes__
                     }
                     fn to_bytes_with(&self, __afast_marker__: &str) -> Vec<u8> {
-                        let mut bytes = Vec::new();
+                        let mut __afast_bytes__ = Vec::new();
                         #(#serialize_body_with)*
-                        bytes
+                        __afast_bytes__
                     }
                 }
             }
@@ -213,12 +213,12 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                     Fields::Unit => {
                         arms.push(quote! {
                             #name::#variant_name => {
-                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                                __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                             }
                         });
                         arms_with.push(quote! {
                             #name::#variant_name => {
-                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                                __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                             }
                         });
                     }
@@ -232,7 +232,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                             if !has_skip_attr(&f.attrs).0 {
                                 let fname = &field_names[i];
                                 serialize_fields.push(quote! {
-                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                    __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                                 });
                             }
                         }
@@ -246,24 +246,24 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                             if let Some((m, _)) = skip_with {
                                 serialize_fields_with.push(quote! {
                                     if #m != __afast_marker__ {
-                                        bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                        __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(#fname, __afast_marker__));
                                     }
                                 });
                             } else {
                                 serialize_fields_with.push(quote! {
-                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                    __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(#fname, __afast_marker__));
                                 });
                             }
                         }
                         arms.push(quote! {
                             #name::#variant_name(#(#field_patterns),*) => {
-                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                                __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                 #(#serialize_fields)*
                             }
                         });
                         arms_with.push(quote! {
                             #name::#variant_name(#(#field_patterns),*) => {
-                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                                __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                 #(#serialize_fields_with)*
                             }
                         });
@@ -284,7 +284,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         let mut serialize_fields = Vec::new();
                         for fname in &non_skip_names {
                             serialize_fields.push(quote! {
-                                bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                             });
                         }
                         // _with: include all non-skip fields, skip_with matched ones use runtime check
@@ -305,26 +305,26 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                             if let Some((m, _)) = skip_with {
                                 serialize_fields_with.push(quote! {
                                     if #m != __afast_marker__ {
-                                        bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                        __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(#fname, __afast_marker__));
                                     }
                                 });
                             } else {
                                 serialize_fields_with.push(quote! {
-                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                    __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(#fname, __afast_marker__));
                                 });
                             }
                         }
                         if has_skip {
                             arms.push(quote! {
                                 #name::#variant_name { #(#non_skip_names),*, .. } => {
-                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                     #(#serialize_fields)*
                                 }
                             });
                         } else {
                             arms.push(quote! {
                                 #name::#variant_name { #(#non_skip_names),* } => {
-                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                     #(#serialize_fields)*
                                 }
                             });
@@ -332,14 +332,14 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         if has_any_skip_with {
                             arms_with.push(quote! {
                                 #name::#variant_name { #(#non_skip_names_with),*, .. } => {
-                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                     #(#serialize_fields_with)*
                                 }
                             });
                         } else {
                             arms_with.push(quote! {
                                 #name::#variant_name { #(#non_skip_names_with),* } => {
-                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    __afast_bytes__.extend((#i as #tag_ty).to_le_bytes());
                                     #(#serialize_fields_with)*
                                 }
                             });
@@ -351,18 +351,18 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
             quote! {
                 impl #impl_generics ::afastdata::AFastSerialize for #name #ty_generics {
                     fn to_bytes(&self) -> Vec<u8> {
-                        let mut bytes = Vec::new();
+                        let mut __afast_bytes__ = Vec::new();
                         match self {
                             #(#arms)*
                         }
-                        bytes
+                        __afast_bytes__
                     }
                     fn to_bytes_with(&self, __afast_marker__: &str) -> Vec<u8> {
-                        let mut bytes = Vec::new();
+                        let mut __afast_bytes__ = Vec::new();
                         match self {
                             #(#arms_with)*
                         }
-                        bytes
+                        __afast_bytes__
                     }
                 }
             }
@@ -479,15 +479,15 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
             );
             quote! {
                 impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
-                        let mut offset: usize = 0;
+                    fn from_bytes(__afast_data__: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut __afast_offset__: usize = 0;
                         #(#field_desers)*
-                        Ok((#construct, offset))
+                        Ok((#construct, __afast_offset__))
                     }
-                    fn from_bytes_with(data: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
-                        let mut offset: usize = 0;
+                    fn from_bytes_with(__afast_data__: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut __afast_offset__: usize = 0;
                         #(#field_desers_with)*
-                        Ok((#construct_with, offset))
+                        Ok((#construct_with, __afast_offset__))
                     }
                 }
             }
@@ -503,12 +503,12 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                     Fields::Unit => {
                         arms.push(quote! {
                             #i => {
-                                Ok((#name::#variant_name, offset))
+                                Ok((#name::#variant_name, __afast_offset__))
                             }
                         });
                         arms_with.push(quote! {
                             #i => {
-                                Ok((#name::#variant_name, offset))
+                                Ok((#name::#variant_name, __afast_offset__))
                             }
                         });
                     }
@@ -551,10 +551,10 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                             } else {
                                 let validates = parse_validations(&fname, ftype, &f.attrs);
                                 field_desers.push(quote! {
-                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&__afast_data__[__afast_offset__..])?;
                                     let #fname: #ftype = __val;
                                     #(#validates)*
-                                    offset += __new_offset;
+                                    __afast_offset__ += __new_offset;
                                 });
                                 // _with: check skip_with
                                 let skip_with = has_skip_with_attr(&f.attrs);
@@ -573,18 +573,18 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                         let #fname: #ftype = if __afast_marker__ == #m {
                                             #default_expr
                                         } else {
-                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], __afast_marker__)?;
                                             #(#validates)*
-                                            offset += __new_offset;
+                                            __afast_offset__ += __new_offset;
                                             __val
                                         };
                                     });
                                 } else {
                                     field_desers_with.push(quote! {
-                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], __afast_marker__)?;
                                         let #fname: #ftype = __val;
                                         #(#validates)*
-                                        offset += __new_offset;
+                                        __afast_offset__ += __new_offset;
                                     });
                                 }
                             }
@@ -593,13 +593,13 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         arms.push(quote! {
                             #i => {
                                 #(#field_desers)*
-                                Ok((#name::#variant_name(#(#field_names),*), offset))
+                                Ok((#name::#variant_name(#(#field_names),*), __afast_offset__))
                             }
                         });
                         arms_with.push(quote! {
                             #i => {
                                 #(#field_desers_with)*
-                                Ok((#name::#variant_name(#(#field_names),*), offset))
+                                Ok((#name::#variant_name(#(#field_names),*), __afast_offset__))
                             }
                         });
                     }
@@ -642,10 +642,10 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                             } else {
                                 let validates = parse_validations(fname, ftype, &f.attrs);
                                 field_desers.push(quote! {
-                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                    let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&__afast_data__[__afast_offset__..])?;
                                     let #fname: #ftype = __val;
                                     #(#validates)*
-                                    offset += __new_offset;
+                                    __afast_offset__ += __new_offset;
                                 });
                                 // _with: check skip_with
                                 let skip_with = has_skip_with_attr(&f.attrs);
@@ -664,18 +664,18 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                         let #fname: #ftype = if __afast_marker__ == #m {
                                             #default_expr
                                         } else {
-                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], __afast_marker__)?;
                                             #(#validates)*
-                                            offset += __new_offset;
+                                            __afast_offset__ += __new_offset;
                                             __val
                                         };
                                     });
                                 } else {
                                     field_desers_with.push(quote! {
-                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], __afast_marker__)?;
                                         let #fname: #ftype = __val;
                                         #(#validates)*
-                                        offset += __new_offset;
+                                        __afast_offset__ += __new_offset;
                                     });
                                 }
                             }
@@ -684,13 +684,13 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         arms.push(quote! {
                             #i => {
                                 #(#field_desers)*
-                                Ok((#name::#variant_name { #(#field_names),* }, offset))
+                                Ok((#name::#variant_name { #(#field_names),* }, __afast_offset__))
                             }
                         });
                         arms_with.push(quote! {
                             #i => {
                                 #(#field_desers_with)*
-                                Ok((#name::#variant_name { #(#field_names),* }, offset))
+                                Ok((#name::#variant_name { #(#field_names),* }, __afast_offset__))
                             }
                         });
                     }
@@ -699,20 +699,20 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
 
             quote! {
                 impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
-                    fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
-                        let mut offset: usize = 0;
-                        let (__tag_bytes, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
-                        offset += __new_offset;
-                        match __tag_bytes as usize {
+                    fn from_bytes(__afast_data__: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut __afast_offset__: usize = 0;
+                        let (__afast_tag__, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&__afast_data__[__afast_offset__..])?;
+                        __afast_offset__ += __new_offset;
+                        match __afast_tag__ as usize {
                             #(#arms)*
                             v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
                     }
-                    fn from_bytes_with(data: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
-                        let mut offset: usize = 0;
-                        let (__tag_bytes, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
-                        offset += __new_offset;
-                        match __tag_bytes as usize {
+                    fn from_bytes_with(__afast_data__: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut __afast_offset__: usize = 0;
+                        let (__afast_tag__, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&__afast_data__[__afast_offset__..])?;
+                        __afast_offset__ += __new_offset;
+                        match __afast_tag__ as usize {
                             #(#arms_with)*
                             v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
@@ -760,7 +760,7 @@ fn generate_serialize_fields(
             .map(|f| {
                 let fname = f.ident.as_ref().unwrap();
                 quote! {
-                    bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                    __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
                 }
             })
             .collect(),
@@ -772,7 +772,7 @@ fn generate_serialize_fields(
             .map(|(i, _)| {
                 let idx = Index::from(i);
                 quote! {
-                    bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                    __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
                 }
             })
             .collect(),
@@ -805,12 +805,12 @@ fn generate_serialize_fields_with(
                 if let Some((m, _)) = skip_with {
                     stmts.push(quote! {
                         if #m != #marker {
-                            bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                            __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(&#self_prefix.#fname, #marker));
                         }
                     });
                 } else {
                     stmts.push(quote! {
-                        bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                        __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(&#self_prefix.#fname, #marker));
                     });
                 }
             }
@@ -827,12 +827,12 @@ fn generate_serialize_fields_with(
                 if let Some((m, _)) = skip_with {
                     stmts.push(quote! {
                         if #m != #marker {
-                            bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                            __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(&#self_prefix.#idx, #marker));
                         }
                     });
                 } else {
                     stmts.push(quote! {
-                        bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                        __afast_bytes__.extend(::afastdata::AFastSerialize::to_bytes_with(&#self_prefix.#idx, #marker));
                     });
                 }
             }
@@ -1780,10 +1780,10 @@ fn generate_deserialize_fields(
                     }
                 } else {
                     desers.push(quote! {
-                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&__afast_data__[__afast_offset__..])?;
                         let #fname: #ftype = __val;
                         #(#validates)*
-                        offset += __new_offset;
+                        __afast_offset__ += __new_offset;
                     });
                 }
             }
@@ -1821,10 +1821,10 @@ fn generate_deserialize_fields(
                 } else {
                     let validates = parse_validations(&fname, ftype, &f.attrs);
                     desers.push(quote! {
-                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&__afast_data__[__afast_offset__..])?;
                         let #fname: #ftype = __val;
                         #(#validates)*
-                        offset += __new_offset;
+                        __afast_offset__ += __new_offset;
                     });
                 }
                 field_names.push(fname);
@@ -1892,19 +1892,19 @@ fn generate_deserialize_fields_with(
                             let #fname: #ftype = if #marker_ident == #m {
                                 #default_expr
                             } else {
-                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], #marker_ident)?;
                                 #(#validates)*
-                                offset += __new_offset;
+                                __afast_offset__ += __new_offset;
                                 __val
                             };
                         });
                     } else {
                         let validates = parse_validations(fname, ftype, &f.attrs);
                         desers.push(quote! {
-                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], #marker_ident)?;
                             let #fname: #ftype = __val;
                             #(#validates)*
-                            offset += __new_offset;
+                            __afast_offset__ += __new_offset;
                         });
                     }
                 }
@@ -1945,19 +1945,19 @@ fn generate_deserialize_fields_with(
                             let #fname: #ftype = if #marker_ident == #m {
                                 #default_expr
                             } else {
-                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], #marker_ident)?;
                                 #(#validates)*
-                                offset += __new_offset;
+                                __afast_offset__ += __new_offset;
                                 __val
                             };
                         });
                     } else {
                         let validates = parse_validations(&fname, ftype, &f.attrs);
                         desers.push(quote! {
-                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes_with(&__afast_data__[__afast_offset__..], #marker_ident)?;
                             let #fname: #ftype = __val;
                             #(#validates)*
-                            offset += __new_offset;
+                            __afast_offset__ += __new_offset;
                         });
                     }
                 }
