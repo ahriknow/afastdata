@@ -10,6 +10,7 @@ repository = "https://github.com/ahriknow/afastdata"
 homepage = "https://github.com/ahriknow/afastdata"
 documentation = "https://docs.rs/afastdata"
 keywords = ["serialization", "binary", "derive", "macro", "validation"]
+exclude = ["tests/"]
 categories = ["encoding"]
 
 [dependencies]

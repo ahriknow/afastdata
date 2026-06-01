@@ -350,10 +350,7 @@ enum Container {
 #[test]
 fn test_recursive_enum() {
     roundtrip(&Container::Int(42));
-    roundtrip(&Container::List(vec![
-        String::from("a"),
-        String::from("b"),
-    ]));
+    roundtrip(&Container::List(vec![String::from("a"), String::from("b")]));
     roundtrip(&Container::Map({
         let mut m = HashMap::new();
         m.insert(String::from("key"), 100);
@@ -386,11 +383,7 @@ fn default_name() -> String {
 }
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
-struct TupleWithSkip(
-    i32,
-    #[afast(skip)] String,
-    bool,
-);
+struct TupleWithSkip(i32, #[afast(skip)] String, bool);
 
 #[test]
 fn test_skip_named_field() {
@@ -734,17 +727,9 @@ fn test_complex_combination() {
         tags: vec![String::from("rust"), String::from("fast")],
         score: Some(98.5),
         metadata: meta,
-        shapes: vec![
-            Shape::Circle { radius: 3.0 },
-            Shape::Empty,
-        ],
+        shapes: vec![Shape::Circle { radius: 3.0 }, Shape::Empty],
         position: (1.0, 2.0, 3.0),
-        matrix: [
-            [1, 0, 0, 0],
-            [0, 1, 0, 0],
-            [0, 0, 1, 0],
-            [0, 0, 0, 1],
-        ],
+        matrix: [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
         active: true,
     };
     roundtrip(&c);
@@ -912,4 +897,225 @@ fn test_usize_validation_fail() {
     let bytes = v.to_bytes();
     let err = UsizeStruct::from_bytes(&bytes).unwrap_err();
     assert!(matches!(err.kind(), ErrorKind::ValidateError(7002, _)));
+}
+
+// ==================== skip_with 属性 / skip_with Attribute ====================
+
+fn default_cache_val() -> i32 {
+    999
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct WithSkipWith {
+    id: u32,
+    #[afast(skip_with("cache"))]
+    cached_data: String,
+    name: String,
+}
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct WithSkipWithFn {
+    id: u32,
+    #[afast(skip_with("cache", "default_cache_val"))]
+    cache_version: i32,
+    name: String,
+}
+
+#[test]
+fn test_skip_with_struct_no_marker_match() {
+    // marker 不匹配时，所有字段正常序列化/反序列化
+    let s = WithSkipWith {
+        id: 1,
+        cached_data: String::from("hello"),
+        name: String::from("test"),
+    };
+    let bytes = s.to_bytes_with("other");
+    assert_eq!(bytes, s.to_bytes());
+    let (decoded, _) = WithSkipWith::from_bytes_with(&bytes, "other").unwrap();
+    assert_eq!(s, decoded);
+}
+
+#[test]
+fn test_skip_with_struct_marker_match() {
+    // marker 匹配时，skip_with 字段被跳过
+    let s = WithSkipWith {
+        id: 1,
+        cached_data: String::from("this should be skipped"),
+        name: String::from("test"),
+    };
+    let bytes_full = s.to_bytes();
+    let bytes_with = s.to_bytes_with("cache");
+    // to_bytes_with 应该更短（跳过了 cached_data）
+    assert!(bytes_with.len() < bytes_full.len());
+
+    let (decoded, _) = WithSkipWith::from_bytes_with(&bytes_with, "cache").unwrap();
+    assert_eq!(decoded.id, 1);
+    assert_eq!(decoded.cached_data, String::new()); // Default::default()
+    assert_eq!(decoded.name, String::from("test"));
+}
+
+#[test]
+fn test_skip_with_struct_with_fn() {
+    let s = WithSkipWithFn {
+        id: 42,
+        cache_version: 100,
+        name: String::from("test"),
+    };
+    let bytes_with = s.to_bytes_with("cache");
+    let (decoded, _) = WithSkipWithFn::from_bytes_with(&bytes_with, "cache").unwrap();
+    assert_eq!(decoded.id, 42);
+    assert_eq!(decoded.cache_version, 999); // default_cache_val()
+    assert_eq!(decoded.name, String::from("test"));
+}
+
+#[test]
+fn test_skip_with_struct_normal_roundtrip() {
+    // to_bytes + from_bytes 不受 skip_with 影响
+    let s = WithSkipWith {
+        id: 1,
+        cached_data: String::from("full"),
+        name: String::from("test"),
+    };
+    roundtrip(&s);
+}
+
+// ==================== skip_with 元组结构体 / skip_with Tuple Struct ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct TupleSkipWith(u32, #[afast(skip_with("hidden"))] String, bool);
+
+#[test]
+fn test_skip_with_tuple_marker_match() {
+    let s = TupleSkipWith(1, String::from("secret"), true);
+    let bytes_with = s.to_bytes_with("hidden");
+    let (decoded, _) = TupleSkipWith::from_bytes_with(&bytes_with, "hidden").unwrap();
+    assert_eq!(decoded.0, 1);
+    assert_eq!(decoded.1, String::new()); // Default::default()
+    assert_eq!(decoded.2, true);
+}
+
+#[test]
+fn test_skip_with_tuple_no_match() {
+    let s = TupleSkipWith(1, String::from("visible"), true);
+    let bytes_with = s.to_bytes_with("other");
+    let (decoded, _) = TupleSkipWith::from_bytes_with(&bytes_with, "other").unwrap();
+    assert_eq!(s, decoded);
+}
+
+// ==================== skip_with 枚举 / skip_with Enum ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+enum EnumSkipWith {
+    Unit,
+    Named {
+        id: u32,
+        #[afast(skip_with("internal"))]
+        secret: String,
+    },
+    Unnamed(u32, #[afast(skip_with("internal"))] String),
+}
+
+#[test]
+fn test_skip_with_enum_named_marker_match() {
+    let e = EnumSkipWith::Named {
+        id: 10,
+        secret: String::from("hidden"),
+    };
+    let bytes_with = e.to_bytes_with("internal");
+    // 只包含 tag(1) + id(4) = 5 bytes
+    assert_eq!(bytes_with, vec![1, 10, 0, 0, 0]);
+    let (decoded, _) = EnumSkipWith::from_bytes_with(&bytes_with, "internal").unwrap();
+    match decoded {
+        EnumSkipWith::Named { id, secret } => {
+            assert_eq!(id, 10);
+            assert_eq!(secret, String::new()); // Default::default()
+        }
+        _ => panic!("expected Named variant"),
+    }
+}
+
+#[test]
+fn test_skip_with_enum_named_no_match() {
+    let e = EnumSkipWith::Named {
+        id: 10,
+        secret: String::from("visible"),
+    };
+    let bytes_with = e.to_bytes_with("other");
+    let bytes_full = e.to_bytes();
+    assert_eq!(bytes_with, bytes_full);
+    let (decoded, _) = EnumSkipWith::from_bytes_with(&bytes_with, "other").unwrap();
+    assert_eq!(e, decoded);
+}
+
+#[test]
+fn test_skip_with_enum_unnamed_marker_match() {
+    let e = EnumSkipWith::Unnamed(42, String::from("hidden"));
+    let bytes_with = e.to_bytes_with("internal");
+    // 只包含 tag(1) + id(4) = 5 bytes
+    assert_eq!(bytes_with, vec![2, 42, 0, 0, 0]);
+    let (decoded, _) = EnumSkipWith::from_bytes_with(&bytes_with, "internal").unwrap();
+    match decoded {
+        EnumSkipWith::Unnamed(id, secret) => {
+            assert_eq!(id, 42);
+            assert_eq!(secret, String::new()); // Default::default()
+        }
+        _ => panic!("expected Unnamed variant"),
+    }
+}
+
+#[test]
+fn test_skip_with_enum_unit() {
+    let e = EnumSkipWith::Unit;
+    let bytes_with = e.to_bytes_with("internal");
+    assert_eq!(bytes_with, vec![0]);
+    let (decoded, _) = EnumSkipWith::from_bytes_with(&bytes_with, "internal").unwrap();
+    assert_eq!(e, decoded);
+}
+
+// ==================== skip_with + skip 共存 / skip_with + skip Coexistence ====================
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct SkipMixed {
+    id: u32,
+    #[afast(skip)]
+    always_hidden: String,
+    #[afast(skip_with("cache"))]
+    cacheable: String,
+    name: String,
+}
+
+#[test]
+fn test_skip_and_skip_with_coexistence() {
+    let s = SkipMixed {
+        id: 1,
+        always_hidden: String::from("never serialized"),
+        cacheable: String::from("cached"),
+        name: String::from("test"),
+    };
+
+    // to_bytes: always_hidden 被跳过
+    let bytes = s.to_bytes();
+    let (decoded, _) = SkipMixed::from_bytes(&bytes).unwrap();
+    assert_eq!(decoded.id, 1);
+    assert_eq!(decoded.always_hidden, String::new()); // skip → Default
+    assert_eq!(decoded.cacheable, String::from("cached"));
+    assert_eq!(decoded.name, String::from("test"));
+
+    // to_bytes_with("cache"): always_hidden + cacheable 都被跳过
+    let bytes_with = s.to_bytes_with("cache");
+    assert!(bytes_with.len() < bytes.len());
+    let (decoded, _) = SkipMixed::from_bytes_with(&bytes_with, "cache").unwrap();
+    assert_eq!(decoded.id, 1);
+    assert_eq!(decoded.always_hidden, String::new()); // skip → Default
+    assert_eq!(decoded.cacheable, String::new()); // skip_with match → Default
+    assert_eq!(decoded.name, String::from("test"));
+
+    // to_bytes_with("other"): 只有 always_hidden 被跳过
+    let bytes_other = s.to_bytes_with("other");
+    assert_eq!(bytes_other, bytes); // 同 to_bytes
+    let (decoded, _) = SkipMixed::from_bytes_with(&bytes_other, "other").unwrap();
+    assert_eq!(decoded.id, 1);
+    assert_eq!(decoded.always_hidden, String::new());
+    assert_eq!(decoded.cacheable, String::from("cached"));
+    assert_eq!(decoded.name, String::from("test"));
 }

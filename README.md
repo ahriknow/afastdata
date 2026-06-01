@@ -1,43 +1,44 @@
 # afastdata
 
+[![CI](https://github.com/ahriknow/afastdata/actions/workflows/publish.yml/badge.svg)](https://github.com/ahriknow/afastdata/actions/workflows/publish.yml)
 [![Crates.io](https://img.shields.io/crates/v/afastdata.svg)](https://crates.io/crates/afastdata)
 [![docs.rs](https://docs.rs/afastdata/badge.svg)](https://docs.rs/afastdata)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-**[English](README_EN.md)** | 中文
+English | **[中文](README_CN.md)**
 
-高性能 Rust 二进制序列化/反序列化框架，通过 derive 宏为自定义类型自动生成序列化代码。
+A high-performance Rust binary serialization/deserialization framework that automatically generates serialization code for custom types via derive macros.
 
-## 特性
+## Features
 
-- **零配置派生宏** — `#[derive(AFastSerialize, AFastDeserialize)]`
-- **丰富的类型支持** — 基本类型、`String`、`Vec<T>`、`Option<T>`、`[T; N]`、`Box<T>`、元组、`HashMap`、`HashSet`、`BTreeMap`、`BTreeSet`、嵌套结构体、枚举
-- **泛型支持** — 自动为泛型参数添加 trait 约束
-- **可配置长度前缀** — 默认 `u32`（最大 4GB），可通过 feature 切换为 `u64`
-- **可配置枚举标签** — 默认 `u8`，可通过 feature 切换为 `u16` 或 `u32`
-- **可配置元组支持** — 默认支持最多 16 个元素，可通过 feature 切换为 8 或 32
-- **统一小端序** — 所有多字节数据使用 little-endian 编码
-- **零外部依赖** — 运行时无第三方依赖
+- **Zero-config derive macros** — `#[derive(AFastSerialize, AFastDeserialize)]` in one line
+- **Rich type support** — Primitives, `String`, `Vec<T>`, `Option<T>`, `[T; N]`, `Box<T>`, tuples, `HashMap`, `HashSet`, `BTreeMap`, `BTreeSet`, nested structs, enums
+- **Generic support** — Automatically adds trait bounds for generic parameters
+- **Configurable length prefix** — Default `u32` (max 4GB), switchable to `u64` via feature flag
+- **Configurable enum tags** — Default `u8`, switchable to `u16` or `u32` via feature flags
+- **Configurable tuple support** — Default max 16 elements, switchable to 8 or 32 via feature flags
+- **Uniform little-endian** — All multi-byte data uses little-endian encoding
+- **Zero runtime dependencies** — No third-party dependencies at runtime
 
-## 快速开始
+## Quick Start
 
-### 安装
+### Installation
 
-在 `Cargo.toml` 中添加依赖：
-
-```toml
-[dependencies]
-afastdata = "0.0.6"
-```
-
-如需 `u64` 长度前缀或自定义枚举标签类型：
+Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.6", features = ["len-u64", "tag-u16"] }
+afastdata = "0.0.7"
 ```
 
-### 基本用法
+For `u64` length prefix or custom enum tag type:
+
+```toml
+[dependencies]
+afastdata = { version = "0.0.7", features = ["len-u64", "tag-u16"] }
+```
+
+### Basic Usage
 
 ```rust
 use afastdata::{AFastSerialize, AFastDeserialize};
@@ -56,17 +57,17 @@ fn main() {
         email: Some(String::from("alice@example.com")),
     };
 
-    // 序列化
+    // Serialize
     let bytes = user.to_bytes();
 
-    // 反序列化
+    // Deserialize
     let (decoded, consumed) = User::from_bytes(&bytes).unwrap();
     assert_eq!(user, decoded);
-    println!("消耗 {} 字节", consumed);
+    println!("Consumed {} bytes", consumed);
 }
 ```
 
-### 枚举示例
+### Enum Example
 
 ```rust
 use afastdata::{AFastSerialize, AFastDeserialize};
@@ -90,7 +91,7 @@ fn main() {
 }
 ```
 
-### 泛型结构体
+### Generic Struct
 
 ```rust
 use afastdata::{AFastSerialize, AFastDeserialize};
@@ -115,11 +116,11 @@ fn main() {
 }
 ```
 
-## 数据校验
+## Validation
 
-通过 `#[afast(...)]` 属性，为结构体字段和枚举变体字段添加校验规则。
+You can add validation rules to struct fields and enum variant fields using the `#[afast(...)]` attribute.
 
-### 结构体校验示例
+### Struct Validation Example
 
 ```rust
 use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
@@ -127,8 +128,8 @@ use afastdata::{AFastDeserialize, AFastSerialize, ValidateError};
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 struct A {
     #[afast(
-        gt(10, 0, "${field} 必须大于 10"),
-        lte(100, 0, "${field} 必须小于等于 100")
+        gt(10, 0, "${field} must be greater than 10"),
+        lte(100, 0, "${field} must be less than or equal to 100")
     )]
     a: i64,
 
@@ -136,14 +137,14 @@ struct A {
         10,
         100,
         1,
-        "${field} 长度必须大于等于 10 且小于等于 100"
+        "${field} length must be between 10 and 100"
     ))]
     b: Option<String>,
 
-    #[afast(func("v"))] // 调用 v 函数进行校验, 参数为 `值` 和 `字段名`
+    #[afast(func("v"))] // call v function to validate, parameter is `value` and `field name`
     c: i32,
 
-    #[afast(skip("d"))] // 调用 d 函数, #[afast(skip)] 将调用 i64::default()
+    #[afast(skip("d"))] // call d function, #[afast(skip)] will call i64::default()
     e: i64,
 }
 
@@ -153,7 +154,7 @@ fn v(value: &i32, field: &str) -> Result<(), ValidateError> {
     } else {
         Err(ValidateError::new(
             2,
-            format!("{} 必须是偶数，但实际为 {}", field, value),
+            format!("{} must be an even number, but got {}", field, value),
         ))
     }
 }
@@ -163,28 +164,28 @@ fn d() -> i64 {
 }
 ```
 
-### 枚举变体校验示例
+### Enum Variant Validation Example
 
-校验规则同样适用于枚举的命名字段变体和元组变体：
+Validation rules also work on named-field and tuple enum variants:
 
 ```rust
 use afastdata::{AFastDeserialize, AFastSerialize, ErrorKind};
 
 #[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
 enum Command {
-    // 命名字段变体
+    // Named-field variant
     Login {
-        #[afast(len(1, 32, 1001, "用户名 ${field} 长度必须在 1-32 之间"))]
+        #[afast(len(1, 32, 1001, "username ${field} length must be 1-32"))]
         username: String,
-        #[afast(len(6, 128, 1002, "密码 ${field} 长度必须在 6-128 之间"))]
+        #[afast(len(6, 128, 1002, "password ${field} length must be 6-128"))]
         password: String,
     },
-    // 元组变体
-    Send(#[afast(gte(0, 2001, "值必须 >= 0"))] i64),
+    // Tuple variant
+    Send(#[afast(gte(0, 2001, "value must be >= 0"))] i64),
 }
 
 fn main() {
-    // 校验通过
+    // Validation passes
     let cmd = Command::Login {
         username: String::from("alice"),
         password: String::from("secret123"),
@@ -192,7 +193,7 @@ fn main() {
     let bytes = cmd.to_bytes();
     assert!(Command::from_bytes(&bytes).is_ok());
 
-    // 校验失败：用户名为空
+    // Validation fails: empty username
     let cmd = Command::Login {
         username: String::new(),
         password: String::from("secret123"),
@@ -203,112 +204,159 @@ fn main() {
 }
 ```
 
-### 校验规则
+### Validate Attribute
 
-校验规则适用于结构体字段和枚举变体字段（命名字段和元组变体）：
+Validation rules apply to both struct fields and enum variant fields (named and tuple variants):
 
-- `skip` or `skip(default)`：跳过此字段的序列化和反序列化，并使用默认值（调用传入的 default 函数或者给字段类型实现 Default trait）
-- `gt(value, code, message)`：字段值必须大于 `value`（支持整数和浮点数），否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`（`None` 视为通过）
-- `gte(value, code, message)`：字段值必须大于等于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
-- `lt(value, code, message)`：字段值必须小于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
-- `lte(value, code, message)`：字段值必须小于等于 `value`，否则返回 `ValidateError`。适用于数值类型和 `Option<数值类型>`
-- `len(min, max, code, message)`：字段长度必须在 `min` 和 `max` 之间（包含两端），适用于 `String`、`Vec<T>`、`[T; N]`、`Option<T>` 包裹的上述类型（`None` 视为通过）。`min` 或 `max` 传 `-1` 表示不限制该边界，例如 `len(3, -1, ...)` 表示最小长度 3，无最大限制
-- `of([v1, v2, ...], code, message)`：字段值必须在 `[v1, v2, ...]` 列表中，否则返回 `ValidateError`
-- `func(name)`：调用外部函数 `name` 进行校验，函数签名为 `fn(value: &T, field: &str) -> Result<(), ValidateError>`，返回 `Ok(())` 则校验通过，否则返回 `ValidateError`
+- `skip` or `skip("default_fn")` — Always skip this field during serialization and deserialization. On deserialize, fill with default value (call the given function, or `Default::default()`)
+- `skip_with("marker")` or `skip_with("marker", "default_fn")` — Conditionally skip. When the marker passed to `to_bytes_with` / `from_bytes_with` matches this field's marker, the field is skipped. Otherwise it is serialized/deserialized normally
+- `gt(value, code, message)`: field value must be greater than `value` (supports integer and float literals), otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>` (`None` passes validation)
+- `gte(value, code, message)`: field value must be greater than or equal to `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `lt(value, code, message)`: field value must be less than `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `lte(value, code, message)`: field value must be less than or equal to `value`, otherwise return `ValidateError`. Applicable to numeric types and `Option<numeric>`
+- `len(min, max, code, message)`: field length must be between `min` and `max`, applicable to `String`, `Vec<T>`, `[T; N]`, or `Option<T>` wrapping these types (`None` passes validation). Pass `-1` for `min` or `max` to leave that bound unrestricted, e.g. `len(3, -1, ...)` means min length 3 with no max limit
+- `of([v1, v2, ...], code, message)`: field value must be one of `[v1, v2, ...]`, otherwise return `ValidateError`
+- `func(name)` — Call external function for validation. Signature: `fn(value: &T, field: &str) -> Result<(), ValidateError>`
 
-> **类型检查**：校验规则在编译期检查字段类型兼容性。例如 `gt`/`gte`/`lt`/`lte` 只能用于数值类型或 `Option<数值类型>`，`len` 只能用于字符串和集合类型。不兼容的组合会产生编译错误。
+> **Type checking**: Validation rules check field type compatibility at compile time. For example, `gt`/`gte`/`lt`/`lte` only work on numeric types or `Option<numeric>`, and `len` only works on string and collection types. Incompatible combinations produce a compile error.
 
-## 支持的类型
+## Conditional Serialization (`skip_with`)
 
-| 类型 | 序列化方式 | 字节数 |
+`skip_with` enables conditional field skipping based on a marker string, useful when the same type needs different serialization strategies in different contexts:
+
+```rust
+use afastdata::{AFastSerialize, AFastDeserialize};
+
+#[derive(AFastSerialize, AFastDeserialize, Debug, PartialEq)]
+struct Packet {
+    header: u32,
+    #[afast(skip_with("cache"))]
+    payload: Vec<u8>,
+    #[afast(skip_with("cache", "default_checksum"))]
+    checksum: u64,
+}
+
+fn default_checksum() -> u64 { 0 }
+
+fn main() {
+    let pkt = Packet {
+        header: 1,
+        payload: vec![1, 2, 3],
+        checksum: 0xABCD,
+    };
+
+    // Full serialization (all fields included)
+    let full = pkt.to_bytes();
+
+    // Conditional serialization (skip fields with marker="cache")
+    let cached = pkt.to_bytes_with("cache");
+    // `cached` only contains the header — shorter than `full`
+
+    // Conditional deserialization
+    let (decoded, _) = Packet::from_bytes_with(&cached, "cache").unwrap();
+    assert_eq!(decoded.header, 1);
+    assert_eq!(decoded.payload, Vec::new());     // Default::default()
+    assert_eq!(decoded.checksum, 0);             // default_checksum()
+}
+```
+
+`to_bytes_with(marker)` and `from_bytes_with(data, marker)` accept a marker string:
+
+- **Marker matches** the field's `skip_with` tag → serialize skips the field; deserialize fills with default value or custom function
+- **Marker does not match** → behavior is identical to `to_bytes()` / `from_bytes()`
+- For primitive types (`i32`, `String`, `Vec<T>`, etc.), the `_with` methods default to calling the regular methods
+
+## Supported Types
+
+| Type | Serialization | Size |
 |---|---|---|
-| `i8`, `u8` | little-endian | 1 |
-| `i16`, `u16` | little-endian | 2 |
-| `i32`, `u32` | little-endian | 4 |
-| `i64`, `u64` | little-endian | 8 |
-| `usize` | u64 little-endian（跨平台兼容） | 8 |
-| `i128`, `u128` | little-endian | 16 |
-| `f32` | IEEE 754 little-endian | 4 |
-| `f64` | IEEE 754 little-endian | 8 |
-| `bool` | `0x00`=false, `0x01`=true | 1 |
-| `String` | LenInt 长度前缀 + UTF-8 字节 | 变长 |
-| `&str` | LenInt 长度前缀 + UTF-8 字节（仅序列化） | 变长 |
-| `Vec<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
-| `Option<T>` | 1 字节标记 + 数据（仅 Some） | 变长 |
-| `[T; N]` | 逐元素编码，无长度前缀 | 固定 |
-| `(A, B, ...)` | 逐元素编码，无长度前缀 | 固定/变长 |
-| `Box<T>` | 与 `T` 相同 | 与 `T` 相同 |
-| `HashMap<K, V>` | LenInt 键值对数 + 逐对编码 | 变长 |
-| `HashSet<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
-| `BTreeMap<K, V>` | LenInt 键值对数 + 逐对编码 | 变长 |
-| `BTreeSet<T>` | LenInt 元素个数 + 逐元素编码 | 变长 |
-| 结构体 | 逐字段编码，无额外前缀 | 变长 |
-| 枚举 | Tag(u8/u16/u32) 变体索引 + 变体字段数据 | 变长 |
+| `i8`, `u8` | little-endian | 1 byte |
+| `i16`, `u16` | little-endian | 2 bytes |
+| `i32`, `u32` | little-endian | 4 bytes |
+| `i64`, `u64` | little-endian | 8 bytes |
+| `usize` | u64 little-endian (cross-platform) | 8 bytes |
+| `i128`, `u128` | little-endian | 16 bytes |
+| `f32` | IEEE 754 little-endian | 4 bytes |
+| `f64` | IEEE 754 little-endian | 8 bytes |
+| `bool` | `0x00`=false, `0x01`=true | 1 byte |
+| `String` | LenInt prefix + UTF-8 bytes | Variable |
+| `&str` | LenInt prefix + UTF-8 bytes (serialize only) | Variable |
+| `Vec<T>` | LenInt element count + element-wise encoding | Variable |
+| `Option<T>` | 1-byte tag + data (only when Some) | Variable |
+| `[T; N]` | Element-wise encoding, no length prefix | Fixed |
+| `(A, B, ...)` | Element-wise encoding, no length prefix | Fixed/Variable |
+| `Box<T>` | Same as `T` | Same as `T` |
+| `HashMap<K, V>` | LenInt entry count + key-value pair encoding | Variable |
+| `HashSet<T>` | LenInt element count + element-wise encoding | Variable |
+| `BTreeMap<K, V>` | LenInt entry count + key-value pair encoding | Variable |
+| `BTreeSet<T>` | LenInt element count + element-wise encoding | Variable |
+| Struct | Field-by-field encoding, no extra prefix | Variable |
+| Enum | Tag(u8/u16/u32) variant index + variant field data | Variable |
 
-## 编码格式详解
+## Encoding Format
 
-### 结构体
+### Struct
 
-所有字段按声明顺序依次序列化，无额外前缀：
+All fields are serialized in declaration order with no additional prefix:
 
 ```
 [field1 bytes][field2 bytes][field3 bytes]...
 ```
 
-### 枚举
+### Enum
 
-先写入变体索引（Tag 类型，默认 `u8`，可通过 feature 切换为 `u16` 或 `u32`，从 0 开始按声明顺序递增），再写入变体字段数据：
+Writes a variant index (Tag type, default `u8`, switchable to `u16` or `u32` via feature flags, starting from 0, incrementing by declaration order), followed by the variant's field data:
 
 ```
 [Tag variant_index][field1 bytes][field2 bytes]...
 ```
 
-Unit 变体只写入索引，无字段数据。
+Unit variants only write the index, with no field data.
 
-### 长度前缀
+### Length Prefix
 
-`String`、`Vec<T>` 等变长类型使用 `LenInt` 作为长度前缀：
+Variable-length types like `String` and `Vec<T>` use `LenInt` as the length prefix:
 
-- 默认：`u32` little-endian（4 字节，最大约 4GB）
-- 启用 `len-u64` feature 后：`u64` little-endian（8 字节）
+- Default: `u32` little-endian (4 bytes, max ~4GB)
+- With `len-u64` feature: `u64` little-endian (8 bytes)
 
 ## Feature Flags
 
-| Feature | 说明 | 默认 |
+| Feature | Description | Default |
 |---|---|---|
-| `len-u64` | 将长度前缀从 `u32` 切换为 `u64` | 否 |
-| `tag-u8` | 枚举变体标签使用 `u8`（1 字节，最多 256 个变体） | 是 |
-| `tag-u16` | 枚举变体标签使用 `u16`（2 字节，最多 65536 个变体） | 否 |
-| `tag-u32` | 枚举变体标签使用 `u32`（4 字节，最多约 42 亿个变体） | 否 |
-| `tuple-8` | 元组支持最多 8 个元素 | 否 |
-| `tuple-16` | 元组支持最多 16 个元素 | 是 |
-| `tuple-32` | 元组支持最多 32 个元素 | 否 |
+| `len-u64` | Switch the length prefix from `u32` to `u64` | No |
+| `tag-u8` | Enum variant tag uses `u8` (1 byte, max 256 variants) | Yes |
+| `tag-u16` | Enum variant tag uses `u16` (2 bytes, max 65536 variants) | No |
+| `tag-u32` | Enum variant tag uses `u32` (4 bytes, max ~4.2 billion variants) | No |
+| `tuple-8` | Tuple support up to 8 elements | No |
+| `tuple-16` | Tuple support up to 16 elements | Yes |
+| `tuple-32` | Tuple support up to 32 elements | No |
 
-## 项目结构
+## Project Structure
 
 ```
 afastdata/
-├── Cargo.toml                  # Workspace 配置
-├── README.md                   # 中文文档（本文件）
-├── README_EN.md                # English documentation
-├── afastdata/                  # 核心库 + 统一入口 crate
-│   ├── Cargo.toml              # 含 `len-u64`、`tag-*`、`tuple-*` features
-│   ├── src/lib.rs              # trait 定义 + 基本类型实现 + re-export derive 宏
+├── Cargo.toml              # Workspace configuration
+├── README.md               # English documentation (this file)
+├── README_CN.md            # 中文文档
+├── afastdata/              # Core library + unified entry crate
+│   ├── Cargo.toml          # Contains `len-u64`, `tag-*`, `tuple-*` features
+│   ├── src/lib.rs          # Trait definitions + primitive type implementations + re-exports derive macros
 │   └── tests/
-│       ├── derive_tests.rs     # 派生宏集成测试
-│       └── primitive_tests.rs  # 基本类型序列化测试
-└── afastdata-macro/            # Proc-macro 库
+│       ├── derive_tests.rs     # Derive macro integration tests
+│       └── primitive_tests.rs  # Primitive type serialization tests
+└── afastdata-macro/        # Proc-macro library
     ├── Cargo.toml
-    └── src/lib.rs              # AFastSerialize / AFastDeserialize derive 宏
+    └── src/lib.rs          # AFastSerialize / AFastDeserialize derive macros
 ```
 
-## 运行示例
+## Running the Example
 
 ```bash
 cargo run --example basic -p afastdata
 ```
 
-## 运行测试
+## Running Tests
 
 ```bash
 cargo test --workspace

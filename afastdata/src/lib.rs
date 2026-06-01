@@ -92,6 +92,18 @@ pub trait AFastSerialize {
     ///
     /// Returns a `Vec<u8>` containing the complete binary representation of the value.
     fn to_bytes(&self) -> Vec<u8>;
+
+    /// 将值序列化为字节数组，跳过与指定 marker 匹配的 `skip_with` 字段。
+    ///
+    /// Serialize the value into a byte array, skipping `skip_with` fields whose
+    /// marker matches the given marker.
+    ///
+    /// 默认实现直接调用 `to_bytes()`（即不跳过任何字段）。
+    ///
+    /// The default implementation simply calls `to_bytes()` (i.e., skips no fields).
+    fn to_bytes_with(&self, _marker: &str) -> Vec<u8> {
+        self.to_bytes()
+    }
 }
 
 /// 反序列化 trait，为类型提供从字节数组还原的能力。
@@ -137,6 +149,19 @@ pub trait AFastDeserialize: Sized {
     ///
     /// Returns `Err` when there are insufficient bytes or the format is invalid.
     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error>;
+
+    /// 从字节数组中反序列化一个值，跳过与指定 marker 匹配的 `skip_with` 字段。
+    ///
+    /// Deserialize a value from a byte array, skipping `skip_with` fields whose
+    /// marker matches the given marker (those fields use default values or custom
+    /// functions instead of reading from the byte stream).
+    ///
+    /// 默认实现直接调用 `from_bytes()`（即不跳过任何字段）。
+    ///
+    /// The default implementation simply calls `from_bytes()` (i.e., skips no fields).
+    fn from_bytes_with(data: &[u8], _marker: &str) -> Result<(Self, usize), Error> {
+        Self::from_bytes(data)
+    }
 }
 
 /// 从字节切片中精确读取指定数量的字节。内部辅助函数。
@@ -665,7 +690,10 @@ impl<T: AFastDeserialize> AFastDeserialize for Box<T> {
 // tuple-8 → up to 8 elements
 // tuple-16 → up to 16 elements (default)
 // tuple-32 → up to 32 elements
-#[cfg(all(feature = "tuple-8", not(any(feature = "tuple-16", feature = "tuple-32"))))]
+#[cfg(all(
+    feature = "tuple-8",
+    not(any(feature = "tuple-16", feature = "tuple-32"))
+))]
 impl_tuple!(A, B, C, D, E, F, G, H);
 
 #[cfg(all(feature = "tuple-16", not(feature = "tuple-32")))]
@@ -673,7 +701,6 @@ impl_tuple!(A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P);
 
 #[cfg(feature = "tuple-32")]
 impl_tuple!(
-    A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P,
-    Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD, AE, AF
+    A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z, AA, AB, AC, AD,
+    AE, AF
 );
-

@@ -11,6 +11,7 @@ homepage = "https://github.com/ahriknow/afastdata"
 documentation = "https://docs.rs/afastdata-macro"
 keywords = ["serialization", "binary", "derive", "macro"]
 categories = ["encoding"]
+exclude = ["tests/"]
 
 [lib]
 proc-macro = true

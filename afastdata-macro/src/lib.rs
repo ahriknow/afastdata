@@ -74,8 +74,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Attribute, Data, DeriveInput, Fields, Index, Lit, LitFloat, LitInt, LitStr, Meta, Path, Token, Type,
-    TypePath,
+    Attribute, Data, DeriveInput, Fields, Index, Lit, LitFloat, LitInt, LitStr, Meta, Path, Token,
+    Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
     punctuated::Punctuated,
@@ -184,11 +184,19 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
     let expanded = match &input.data {
         Data::Struct(data) => {
             let serialize_body = generate_serialize_fields(&data.fields, quote!(self));
+            let marker_ident = syn::Ident::new("__afast_marker__", proc_macro2::Span::call_site());
+            let serialize_body_with =
+                generate_serialize_fields_with(&data.fields, quote!(self), &marker_ident);
             quote! {
                 impl #impl_generics ::afastdata::AFastSerialize for #name #ty_generics {
                     fn to_bytes(&self) -> Vec<u8> {
                         let mut bytes = Vec::new();
                         #(#serialize_body)*
+                        bytes
+                    }
+                    fn to_bytes_with(&self, __afast_marker__: &str) -> Vec<u8> {
+                        let mut bytes = Vec::new();
+                        #(#serialize_body_with)*
                         bytes
                     }
                 }
@@ -197,6 +205,7 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
         Data::Enum(data) => {
             let (tag_ty, _) = tag_type();
             let mut arms = Vec::new();
+            let mut arms_with = Vec::new();
             for (i, variant) in data.variants.iter().enumerate() {
                 let variant_name = &variant.ident;
 
@@ -207,12 +216,15 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                                 bytes.extend((#i as #tag_ty).to_le_bytes());
                             }
                         });
+                        arms_with.push(quote! {
+                            #name::#variant_name => {
+                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                            }
+                        });
                     }
                     Fields::Unnamed(fields) => {
                         let field_names: Vec<_> = (0..fields.unnamed.len())
-                            .map(|i| {
-                                syn::Ident::new(&format!("__f{}", i), variant_name.span())
-                            })
+                            .map(|i| syn::Ident::new(&format!("__f{}", i), variant_name.span()))
                             .collect();
                         let field_patterns = &field_names;
                         let mut serialize_fields = Vec::new();
@@ -224,10 +236,35 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                                 });
                             }
                         }
+                        let mut serialize_fields_with = Vec::new();
+                        for (i, f) in fields.unnamed.iter().enumerate() {
+                            if has_skip_attr(&f.attrs).0 {
+                                continue;
+                            }
+                            let skip_with = has_skip_with_attr(&f.attrs);
+                            let fname = &field_names[i];
+                            if let Some((m, _)) = skip_with {
+                                serialize_fields_with.push(quote! {
+                                    if #m != __afast_marker__ {
+                                        bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                    }
+                                });
+                            } else {
+                                serialize_fields_with.push(quote! {
+                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                });
+                            }
+                        }
                         arms.push(quote! {
                             #name::#variant_name(#(#field_patterns),*) => {
                                 bytes.extend((#i as #tag_ty).to_le_bytes());
                                 #(#serialize_fields)*
+                            }
+                        });
+                        arms_with.push(quote! {
+                            #name::#variant_name(#(#field_patterns),*) => {
+                                bytes.extend((#i as #tag_ty).to_le_bytes());
+                                #(#serialize_fields_with)*
                             }
                         });
                     }
@@ -250,6 +287,33 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                                 bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
                             });
                         }
+                        // _with: include all non-skip fields, skip_with matched ones use runtime check
+                        let non_skip_fields_with: Vec<_> = fields
+                            .named
+                            .iter()
+                            .filter(|f| !has_skip_attr(&f.attrs).0)
+                            .collect();
+                        let has_any_skip_with = non_skip_fields_with.len() < all_field_names.len();
+                        let non_skip_names_with: Vec<_> = non_skip_fields_with
+                            .iter()
+                            .map(|f| f.ident.as_ref().unwrap())
+                            .collect();
+                        let mut serialize_fields_with = Vec::new();
+                        for f in &non_skip_fields_with {
+                            let fname = f.ident.as_ref().unwrap();
+                            let skip_with = has_skip_with_attr(&f.attrs);
+                            if let Some((m, _)) = skip_with {
+                                serialize_fields_with.push(quote! {
+                                    if #m != __afast_marker__ {
+                                        bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                    }
+                                });
+                            } else {
+                                serialize_fields_with.push(quote! {
+                                    bytes.extend(::afastdata::AFastSerialize::to_bytes(#fname));
+                                });
+                            }
+                        }
                         if has_skip {
                             arms.push(quote! {
                                 #name::#variant_name { #(#non_skip_names),*, .. } => {
@@ -265,6 +329,21 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                                 }
                             });
                         }
+                        if has_any_skip_with {
+                            arms_with.push(quote! {
+                                #name::#variant_name { #(#non_skip_names_with),*, .. } => {
+                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    #(#serialize_fields_with)*
+                                }
+                            });
+                        } else {
+                            arms_with.push(quote! {
+                                #name::#variant_name { #(#non_skip_names_with),* } => {
+                                    bytes.extend((#i as #tag_ty).to_le_bytes());
+                                    #(#serialize_fields_with)*
+                                }
+                            });
+                        }
                     }
                 }
             }
@@ -275,6 +354,13 @@ pub fn derive_serialize(input: TokenStream) -> TokenStream {
                         let mut bytes = Vec::new();
                         match self {
                             #(#arms)*
+                        }
+                        bytes
+                    }
+                    fn to_bytes_with(&self, __afast_marker__: &str) -> Vec<u8> {
+                        let mut bytes = Vec::new();
+                        match self {
+                            #(#arms_with)*
                         }
                         bytes
                     }
@@ -385,6 +471,12 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
         Data::Struct(data) => {
             let (construct, field_desers) =
                 generate_deserialize_fields(&data.fields, name, &ty_generics);
+            let (construct_with, field_desers_with) = generate_deserialize_fields_with(
+                &data.fields,
+                name,
+                &ty_generics,
+                "__afast_marker__",
+            );
             quote! {
                 impl #impl_generics ::afastdata::AFastDeserialize for #name #ty_generics {
                     fn from_bytes(data: &[u8]) -> Result<(Self, usize), ::afastdata::Error> {
@@ -392,12 +484,18 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         #(#field_desers)*
                         Ok((#construct, offset))
                     }
+                    fn from_bytes_with(data: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut offset: usize = 0;
+                        #(#field_desers_with)*
+                        Ok((#construct_with, offset))
+                    }
                 }
             }
         }
         Data::Enum(data) => {
             let (tag_ty, _) = tag_type();
             let mut arms = Vec::new();
+            let mut arms_with = Vec::new();
             for (i, variant) in data.variants.iter().enumerate() {
                 let variant_name = &variant.ident;
 
@@ -408,22 +506,28 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                 Ok((#name::#variant_name, offset))
                             }
                         });
+                        arms_with.push(quote! {
+                            #i => {
+                                Ok((#name::#variant_name, offset))
+                            }
+                        });
                     }
                     Fields::Unnamed(fields) => {
                         let mut field_desers = Vec::new();
+                        let mut field_desers_with = Vec::new();
                         let mut field_names = Vec::new();
                         for (i, f) in fields.unnamed.iter().enumerate() {
-                            let fname = syn::Ident::new(
-                                &format!("__f{}", i),
-                                variant_name.span(),
-                            );
+                            let fname = syn::Ident::new(&format!("__f{}", i), variant_name.span());
                             let ftype = &f.ty;
                             let (skip, default_fn) = has_skip_attr(&f.attrs);
                             if skip {
-                                if let Some(func_name) = default_fn {
+                                if let Some(func_name) = default_fn.clone() {
                                     match syn::parse_str::<syn::Ident>(&func_name) {
                                         Ok(ident) => {
                                             field_desers.push(quote! {
+                                                let #fname: #ftype = #ident();
+                                            });
+                                            field_desers_with.push(quote! {
                                                 let #fname: #ftype = #ident();
                                             });
                                         }
@@ -431,10 +535,16 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                             field_desers.push(quote! {
                                                 compile_error!(concat!("invalid function name in skip: ", #func_name));
                                             });
+                                            field_desers_with.push(quote! {
+                                                compile_error!(concat!("invalid function name in skip: ", #func_name));
+                                            });
                                         }
                                     }
                                 } else {
                                     field_desers.push(quote! {
+                                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                                    });
+                                    field_desers_with.push(quote! {
                                         let #fname: #ftype = <#ftype as ::std::default::Default>::default();
                                     });
                                 }
@@ -446,6 +556,37 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                     #(#validates)*
                                     offset += __new_offset;
                                 });
+                                // _with: check skip_with
+                                let skip_with = has_skip_with_attr(&f.attrs);
+                                if let Some((m, sw_default)) = skip_with {
+                                    let default_expr = if let Some(fn_name) = sw_default {
+                                        match syn::parse_str::<syn::Ident>(&fn_name) {
+                                            Ok(ident) => quote! { #ident() },
+                                            Err(_) => {
+                                                quote! { { compile_error!(concat!("invalid function name in skip_with: ", #fn_name)); <#ftype as ::std::default::Default>::default() } }
+                                            }
+                                        }
+                                    } else {
+                                        quote! { <#ftype as ::std::default::Default>::default() }
+                                    };
+                                    field_desers_with.push(quote! {
+                                        let #fname: #ftype = if __afast_marker__ == #m {
+                                            #default_expr
+                                        } else {
+                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                            #(#validates)*
+                                            offset += __new_offset;
+                                            __val
+                                        };
+                                    });
+                                } else {
+                                    field_desers_with.push(quote! {
+                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                        let #fname: #ftype = __val;
+                                        #(#validates)*
+                                        offset += __new_offset;
+                                    });
+                                }
                             }
                             field_names.push(fname);
                         }
@@ -455,19 +596,29 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                 Ok((#name::#variant_name(#(#field_names),*), offset))
                             }
                         });
+                        arms_with.push(quote! {
+                            #i => {
+                                #(#field_desers_with)*
+                                Ok((#name::#variant_name(#(#field_names),*), offset))
+                            }
+                        });
                     }
                     Fields::Named(fields) => {
                         let mut field_desers = Vec::new();
+                        let mut field_desers_with = Vec::new();
                         let mut field_names = Vec::new();
                         for f in &fields.named {
                             let fname = f.ident.as_ref().unwrap();
                             let ftype = &f.ty;
                             let (skip, default_fn) = has_skip_attr(&f.attrs);
                             if skip {
-                                if let Some(func_name) = default_fn {
+                                if let Some(func_name) = default_fn.clone() {
                                     match syn::parse_str::<syn::Ident>(&func_name) {
                                         Ok(ident) => {
                                             field_desers.push(quote! {
+                                                let #fname: #ftype = #ident();
+                                            });
+                                            field_desers_with.push(quote! {
                                                 let #fname: #ftype = #ident();
                                             });
                                         }
@@ -475,10 +626,16 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                             field_desers.push(quote! {
                                                 compile_error!(concat!("invalid function name in skip: ", #func_name));
                                             });
+                                            field_desers_with.push(quote! {
+                                                compile_error!(concat!("invalid function name in skip: ", #func_name));
+                                            });
                                         }
                                     }
                                 } else {
                                     field_desers.push(quote! {
+                                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                                    });
+                                    field_desers_with.push(quote! {
                                         let #fname: #ftype = <#ftype as ::std::default::Default>::default();
                                     });
                                 }
@@ -490,12 +647,49 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                                     #(#validates)*
                                     offset += __new_offset;
                                 });
+                                // _with: check skip_with
+                                let skip_with = has_skip_with_attr(&f.attrs);
+                                if let Some((m, sw_default)) = skip_with {
+                                    let default_expr = if let Some(fn_name) = sw_default {
+                                        match syn::parse_str::<syn::Ident>(&fn_name) {
+                                            Ok(ident) => quote! { #ident() },
+                                            Err(_) => {
+                                                quote! { { compile_error!(concat!("invalid function name in skip_with: ", #fn_name)); <#ftype as ::std::default::Default>::default() } }
+                                            }
+                                        }
+                                    } else {
+                                        quote! { <#ftype as ::std::default::Default>::default() }
+                                    };
+                                    field_desers_with.push(quote! {
+                                        let #fname: #ftype = if __afast_marker__ == #m {
+                                            #default_expr
+                                        } else {
+                                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                            #(#validates)*
+                                            offset += __new_offset;
+                                            __val
+                                        };
+                                    });
+                                } else {
+                                    field_desers_with.push(quote! {
+                                        let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                        let #fname: #ftype = __val;
+                                        #(#validates)*
+                                        offset += __new_offset;
+                                    });
+                                }
                             }
                             field_names.push(fname);
                         }
                         arms.push(quote! {
                             #i => {
                                 #(#field_desers)*
+                                Ok((#name::#variant_name { #(#field_names),* }, offset))
+                            }
+                        });
+                        arms_with.push(quote! {
+                            #i => {
+                                #(#field_desers_with)*
                                 Ok((#name::#variant_name { #(#field_names),* }, offset))
                             }
                         });
@@ -511,6 +705,15 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
                         offset += __new_offset;
                         match __tag_bytes as usize {
                             #(#arms)*
+                            v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
+                        }
+                    }
+                    fn from_bytes_with(data: &[u8], __afast_marker__: &str) -> Result<(Self, usize), ::afastdata::Error> {
+                        let mut offset: usize = 0;
+                        let (__tag_bytes, __new_offset) = <#tag_ty as ::afastdata::AFastDeserialize>::from_bytes(&data[offset..])?;
+                        offset += __new_offset;
+                        match __tag_bytes as usize {
+                            #(#arms_with)*
                             v => Err(::afastdata::Error::deserialize(format!("Unknown variant tag: {} for {}", v, ::std::stringify!(#name)))),
                         }
                     }
@@ -577,6 +780,68 @@ fn generate_serialize_fields(
     }
 }
 
+/// 为结构体的字段生成带 marker 的序列化代码。内部辅助函数。
+///
+/// Generates marker-aware serialization code for struct fields. Internal helper.
+///
+/// 跳过 `#[afast(skip)]` 字段，marker 匹配的 `#[afast(skip_with(...))]` 字段在运行时跳过。
+///
+/// Skips `#[afast(skip)]` fields unconditionally. `#[afast(skip_with(...))]` fields
+/// whose marker matches are skipped at runtime.
+fn generate_serialize_fields_with(
+    fields: &Fields,
+    self_prefix: proc_macro2::TokenStream,
+    marker: &proc_macro2::Ident,
+) -> Vec<proc_macro2::TokenStream> {
+    match fields {
+        Fields::Named(named) => {
+            let mut stmts = Vec::new();
+            for f in &named.named {
+                if has_skip_attr(&f.attrs).0 {
+                    continue;
+                }
+                let fname = f.ident.as_ref().unwrap();
+                let skip_with = has_skip_with_attr(&f.attrs);
+                if let Some((m, _)) = skip_with {
+                    stmts.push(quote! {
+                        if #m != #marker {
+                            bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                        }
+                    });
+                } else {
+                    stmts.push(quote! {
+                        bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#fname));
+                    });
+                }
+            }
+            stmts
+        }
+        Fields::Unnamed(unnamed) => {
+            let mut stmts = Vec::new();
+            for (i, f) in unnamed.unnamed.iter().enumerate() {
+                if has_skip_attr(&f.attrs).0 {
+                    continue;
+                }
+                let idx = Index::from(i);
+                let skip_with = has_skip_with_attr(&f.attrs);
+                if let Some((m, _)) = skip_with {
+                    stmts.push(quote! {
+                        if #m != #marker {
+                            bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                        }
+                    });
+                } else {
+                    stmts.push(quote! {
+                        bytes.extend(::afastdata::AFastSerialize::to_bytes(&#self_prefix.#idx));
+                    });
+                }
+            }
+            stmts
+        }
+        Fields::Unit => vec![],
+    }
+}
+
 fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
     for attr in attrs {
         if attr.path().is_ident("afast")
@@ -601,6 +866,56 @@ fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
         }
     }
     (false, None)
+}
+
+/// 检查字段是否有 `#[afast(skip_with("marker"))]` 或
+/// `#[afast(skip_with("marker", "default_fn"))]` 属性。
+///
+/// Checks whether a field has `#[afast(skip_with("marker"))]` or
+/// `#[afast(skip_with("marker", "default_fn"))]` attribute.
+///
+/// 返回值：`(marker, default_fn)`
+/// - `Some(("marker", None))`：`#[afast(skip_with("marker"))]`，反序列化用 Default
+/// - `Some(("marker", Some("fn")))`：`#[afast(skip_with("marker", "fn"))]`
+/// - `None`：无 skip_with 属性
+fn has_skip_with_attr(attrs: &[Attribute]) -> Option<(String, Option<String>)> {
+    for attr in attrs {
+        if attr.path().is_ident("afast")
+            && let Ok(nested) =
+                attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        {
+            for meta in nested {
+                if let Meta::List(meta_list) = meta {
+                    if meta_list.path.is_ident("skip_with") {
+                        let tokens = meta_list.tokens.clone();
+                        if let Ok(args) = syn::parse2::<SkipWithArgs>(tokens) {
+                            return Some((args.marker.value(), args.default_fn.map(|s| s.value())));
+                        }
+                        return None;
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+struct SkipWithArgs {
+    marker: LitStr,
+    default_fn: Option<LitStr>,
+}
+
+impl Parse for SkipWithArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let marker: LitStr = input.parse()?;
+        let default_fn = if input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            Some(input.parse::<LitStr>()?)
+        } else {
+            None
+        };
+        Ok(SkipWithArgs { marker, default_fn })
+    }
 }
 
 enum RangeValue {
@@ -854,7 +1169,10 @@ fn is_collection_type(ty: &Type) -> bool {
     if let Type::Path(TypePath { path, .. }) = ty {
         if let Some(segment) = path.segments.last() {
             let name = segment.ident.to_string();
-            return matches!(name.as_str(), "String" | "Vec" | "BTreeSet" | "BTreeMap" | "HashSet" | "HashMap");
+            return matches!(
+                name.as_str(),
+                "String" | "Vec" | "BTreeSet" | "BTreeMap" | "HashSet" | "HashMap"
+            );
         }
     }
     // [T; N] arrays
@@ -896,8 +1214,7 @@ fn parse_validations(
     let mut validates = Vec::new();
     for attr in attrs {
         if attr.path().is_ident("afast") {
-            let nested = match attr
-                .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+            let nested = match attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
             {
                 Ok(n) => n,
                 Err(e) => {
@@ -907,9 +1224,9 @@ fn parse_validations(
             };
             for meta in nested {
                 if let Meta::List(meta) = meta {
-                        if meta.path.is_ident("gt") {
-                            if !is_comparable_type(field_type) {
-                                validates.push(
+                    if meta.path.is_ident("gt") {
+                        if !is_comparable_type(field_type) {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -919,48 +1236,51 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
+                            continue;
+                        }
+                        let inner = match meta.parse_args::<Range>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
                                 continue;
                             }
-                            let inner = match meta.parse_args::<Range>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let cmp_value = inner.value.to_token_stream();
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            if is_option_type(field_type) {
-                                validates.push(quote! {
+                        };
+                        let cmp_value = inner.value.to_token_stream();
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        if is_option_type(field_type) {
+                            validates.push(quote! {
                                     if let Some(ref __val) = #field_name {
                                         if *__val <= #cmp_value {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     }
                                 });
-                            } else {
-                                validates.push(quote! {
+                        } else {
+                            validates.push(quote! {
                                     if #field_name <= #cmp_value {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
-                            }
-                        } else if meta.path.is_ident("gte") {
-                            if !is_comparable_type(field_type) {
-                                validates.push(
+                        }
+                    } else if meta.path.is_ident("gte") {
+                        if !is_comparable_type(field_type) {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -970,48 +1290,51 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
+                            continue;
+                        }
+                        let inner = match meta.parse_args::<Range>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
                                 continue;
                             }
-                            let inner = match meta.parse_args::<Range>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let cmp_value = inner.value.to_token_stream();
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            if is_option_type(field_type) {
-                                validates.push(quote! {
+                        };
+                        let cmp_value = inner.value.to_token_stream();
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        if is_option_type(field_type) {
+                            validates.push(quote! {
                                     if let Some(ref __val) = #field_name {
                                         if *__val < #cmp_value {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     }
                                 });
-                            } else {
-                                validates.push(quote! {
+                        } else {
+                            validates.push(quote! {
                                     if #field_name < #cmp_value {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
-                            }
-                        } else if meta.path.is_ident("lt") {
-                            if !is_comparable_type(field_type) {
-                                validates.push(
+                        }
+                    } else if meta.path.is_ident("lt") {
+                        if !is_comparable_type(field_type) {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -1021,48 +1344,51 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
+                            continue;
+                        }
+                        let inner = match meta.parse_args::<Range>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
                                 continue;
                             }
-                            let inner = match meta.parse_args::<Range>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let cmp_value = inner.value.to_token_stream();
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            if is_option_type(field_type) {
-                                validates.push(quote! {
+                        };
+                        let cmp_value = inner.value.to_token_stream();
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        if is_option_type(field_type) {
+                            validates.push(quote! {
                                     if let Some(ref __val) = #field_name {
                                         if *__val >= #cmp_value {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     }
                                 });
-                            } else {
-                                validates.push(quote! {
+                        } else {
+                            validates.push(quote! {
                                     if #field_name >= #cmp_value {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
-                            }
-                        } else if meta.path.is_ident("lte") {
-                            if !is_comparable_type(field_type) {
-                                validates.push(
+                        }
+                    } else if meta.path.is_ident("lte") {
+                        if !is_comparable_type(field_type) {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -1072,53 +1398,56 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
+                            continue;
+                        }
+                        let inner = match meta.parse_args::<Range>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
                                 continue;
                             }
-                            let inner = match meta.parse_args::<Range>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let cmp_value = inner.value.to_token_stream();
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            if is_option_type(field_type) {
-                                validates.push(quote! {
+                        };
+                        let cmp_value = inner.value.to_token_stream();
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        if is_option_type(field_type) {
+                            validates.push(quote! {
                                     if let Some(ref __val) = #field_name {
                                         if *__val > #cmp_value {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     }
                                 });
-                            } else {
-                                validates.push(quote! {
+                        } else {
+                            validates.push(quote! {
                                     if #field_name > #cmp_value {
                                         return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                     }
                                 });
-                            }
-                        } else if meta.path.is_ident("len") {
-                            let field_is_option = is_option_type(field_type);
-                            // For Option<T>, check if inner type is a collection
-                            // For non-Option, check directly
-                            if field_is_option {
-                                // Option<T> is allowed - inner type check is deferred to runtime
-                            } else if !is_collection_type(field_type) {
-                                validates.push(
+                        }
+                    } else if meta.path.is_ident("len") {
+                        let field_is_option = is_option_type(field_type);
+                        // For Option<T>, check if inner type is a collection
+                        // For non-Option, check directly
+                        if field_is_option {
+                            // Option<T> is allowed - inner type check is deferred to runtime
+                        } else if !is_collection_type(field_type) {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -1128,53 +1457,62 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
+                            continue;
+                        }
+
+                        let inner = match meta.parse_args::<Length>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
                                 continue;
                             }
-
-                            let inner = match meta.parse_args::<Length>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let min_value = match inner.min.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.min, format!("invalid min value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let max_value = match inner.max.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.max, format!("invalid max value: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            // -1 is a sentinel meaning "no limit", so skip range check when either is -1
-                            if min_value >= 0 && max_value >= 0 && min_value > max_value {
+                        };
+                        let min_value = match inner.min.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
                                 validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.min,
+                                        format!("invalid min value: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let max_value = match inner.max.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.max,
+                                        format!("invalid max value: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        // -1 is a sentinel meaning "no limit", so skip range check when either is -1
+                        if min_value >= 0 && max_value >= 0 && min_value > max_value {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -1184,10 +1522,10 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
-                                continue;
-                            }
-                            if min_value < 0 && max_value < 0 {
-                                validates.push(
+                            continue;
+                        }
+                        if min_value < 0 && max_value < 0 {
+                            validates.push(
                                     syn::Error::new_spanned(
                                         &meta.path,
                                         format!(
@@ -1197,82 +1535,94 @@ fn parse_validations(
                                     )
                                     .to_compile_error(),
                                 );
-                                continue;
-                            } else if min_value < 0 {
-                                let max: usize = match max_value.try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        validates.push(
-                                            syn::Error::new_spanned(&inner.max, "value too large for usize")
-                                                .to_compile_error(),
-                                        );
-                                        continue;
-                                    }
-                                };
-                                if field_is_option {
-                                    validates.push(quote! {
+                            continue;
+                        } else if min_value < 0 {
+                            let max: usize = match max_value.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(
+                                            &inner.max,
+                                            "value too large for usize",
+                                        )
+                                        .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            if field_is_option {
+                                validates.push(quote! {
                                         if let Some(ref __val) = #field_name {
                                             if __val.len() > #max {
                                                 return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         }
                                     });
-                                } else {
-                                    validates.push(quote! {
+                            } else {
+                                validates.push(quote! {
                                         if #field_name.len() > #max {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     });
+                            }
+                        } else if max_value < 0 {
+                            let min: usize = match min_value.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(
+                                            &inner.min,
+                                            "value too large for usize",
+                                        )
+                                        .to_compile_error(),
+                                    );
+                                    continue;
                                 }
-                            } else if max_value < 0 {
-                                let min: usize = match min_value.try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        validates.push(
-                                            syn::Error::new_spanned(&inner.min, "value too large for usize")
-                                                .to_compile_error(),
-                                        );
-                                        continue;
-                                    }
-                                };
-                                if field_is_option {
-                                    validates.push(quote! {
+                            };
+                            if field_is_option {
+                                validates.push(quote! {
                                         if let Some(ref __val) = #field_name {
                                             if __val.len() < #min {
                                                 return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                             }
                                         }
                                     });
-                                } else {
-                                    validates.push(quote! {
+                            } else {
+                                validates.push(quote! {
                                         if #field_name.len() < #min {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     });
+                            }
+                        } else {
+                            let min: usize = match min_value.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(
+                                            &inner.min,
+                                            "value too large for usize",
+                                        )
+                                        .to_compile_error(),
+                                    );
+                                    continue;
                                 }
-                            } else {
-                                let min: usize = match min_value.try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        validates.push(
-                                            syn::Error::new_spanned(&inner.min, "value too large for usize")
-                                                .to_compile_error(),
-                                        );
-                                        continue;
-                                    }
-                                };
-                                let max: usize = match max_value.try_into() {
-                                    Ok(v) => v,
-                                    Err(_) => {
-                                        validates.push(
-                                            syn::Error::new_spanned(&inner.max, "value too large for usize")
-                                                .to_compile_error(),
-                                        );
-                                        continue;
-                                    }
-                                };
-                                if field_is_option {
-                                    validates.push(quote! {
+                            };
+                            let max: usize = match max_value.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    validates.push(
+                                        syn::Error::new_spanned(
+                                            &inner.max,
+                                            "value too large for usize",
+                                        )
+                                        .to_compile_error(),
+                                    );
+                                    continue;
+                                }
+                            };
+                            if field_is_option {
+                                validates.push(quote! {
                                         let length = match &#field_name {
                                             Some(s) => {
                                                 let __length = s.len();
@@ -1283,75 +1633,76 @@ fn parse_validations(
                                             None => {},
                                         };
                                     });
-                                } else {
-                                    validates.push(quote! {
+                            } else {
+                                validates.push(quote! {
                                         if #field_name.len() < #min || #field_name.len() > #max {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     });
-                                }
                             }
-                        } else if meta.path.is_ident("of") {
-                            let inner = match meta.parse_args::<OfValidator>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let allowed_values = inner.allowed_values.clone();
-                            let code = match inner.code.base10_parse::<i64>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(&inner.code, format!("invalid error code: {}", e))
-                                            .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let err_msg = inner
-                                .msg
-                                .value()
-                                .replace("${field}", &field_name.to_string());
-                            let values_tokens: Vec<_> = allowed_values
-                                .iter()
-                                .map(|v| v.to_token_stream())
-                                .collect();
-                            validates.push(quote! {
+                        }
+                    } else if meta.path.is_ident("of") {
+                        let inner = match meta.parse_args::<OfValidator>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
+                                continue;
+                            }
+                        };
+                        let allowed_values = inner.allowed_values.clone();
+                        let code = match inner.code.base10_parse::<i64>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner.code,
+                                        format!("invalid error code: {}", e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let err_msg = inner
+                            .msg
+                            .value()
+                            .replace("${field}", &field_name.to_string());
+                        let values_tokens: Vec<_> =
+                            allowed_values.iter().map(|v| v.to_token_stream()).collect();
+                        validates.push(quote! {
                                 if !matches!(#field_name, #(#values_tokens)|*) {
                                     return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                 }
                             });
-                        } else if meta.path.is_ident("func") {
-                            let inner = match meta.parse_args::<LitStr>() {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(e.to_compile_error());
-                                    continue;
-                                }
-                            };
-                            let ident = match syn::parse_str::<syn::Ident>(&inner.value()) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    validates.push(
-                                        syn::Error::new_spanned(
-                                            &inner,
-                                            format!("invalid function name `{}`: {}", inner.value(), e),
-                                        )
-                                        .to_compile_error(),
-                                    );
-                                    continue;
-                                }
-                            };
-                            let field = field_name.to_string();
-                            validates.push(quote! {
-                                match #ident(&#field_name, #field) {
-                                    Ok(()) => {},
-                                    Err(e) => return Err(e.to_afastdata_error()),
-                                }
-                            });
-                        }
+                    } else if meta.path.is_ident("func") {
+                        let inner = match meta.parse_args::<LitStr>() {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(e.to_compile_error());
+                                continue;
+                            }
+                        };
+                        let ident = match syn::parse_str::<syn::Ident>(&inner.value()) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                validates.push(
+                                    syn::Error::new_spanned(
+                                        &inner,
+                                        format!("invalid function name `{}`: {}", inner.value(), e),
+                                    )
+                                    .to_compile_error(),
+                                );
+                                continue;
+                            }
+                        };
+                        let field = field_name.to_string();
+                        validates.push(quote! {
+                            match #ident(&#field_name, #field) {
+                                Ok(()) => {},
+                                Err(e) => return Err(e.to_afastdata_error()),
+                            }
+                        });
+                    }
                 }
             }
         }
@@ -1477,6 +1828,139 @@ fn generate_deserialize_fields(
                     });
                 }
                 field_names.push(fname);
+            }
+            let construct = quote! {
+                #name #ty_params ( #(#field_names),* )
+            };
+            (construct, desers)
+        }
+        Fields::Unit => {
+            let construct = quote! { #name #ty_params };
+            (construct, vec![])
+        }
+    }
+}
+
+/// 为结构体的字段生成带 marker 的反序列化代码以及构造表达式。内部辅助函数。
+///
+/// Generates marker-aware deserialization code for struct fields along with the
+/// construction expression. Internal helper.
+///
+/// marker 匹配的 `skip_with` 字段使用默认值或自定义函数填充，不从字节流读取。
+///
+/// `skip_with` fields whose marker matches are filled with default values or custom
+/// functions, without reading from the byte stream.
+fn generate_deserialize_fields_with(
+    fields: &Fields,
+    name: &syn::Ident,
+    ty_generics: &syn::TypeGenerics,
+    marker: &str,
+) -> (proc_macro2::TokenStream, Vec<proc_macro2::TokenStream>) {
+    let ty_params = ty_generics.as_turbofish();
+    // marker 参数是生成代码中的参数名（如 "__afast_marker__"），不是实际值
+    // The marker parameter is the parameter name in generated code, not the actual value
+    let marker_ident = syn::Ident::new(marker, proc_macro2::Span::call_site());
+    match fields {
+        Fields::Named(named) => {
+            let mut desers = Vec::new();
+            let mut field_names = Vec::new();
+            for f in &named.named {
+                let fname = f.ident.as_ref().unwrap();
+                let ftype = &f.ty;
+                field_names.push(fname.clone());
+
+                let (skip, _) = has_skip_attr(&f.attrs);
+                if skip {
+                    desers.push(quote! {
+                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                    });
+                } else {
+                    let skip_with = has_skip_with_attr(&f.attrs);
+                    if let Some((m, default_fn)) = skip_with {
+                        let default_expr = if let Some(fn_name) = default_fn {
+                            match syn::parse_str::<syn::Ident>(&fn_name) {
+                                Ok(ident) => quote! { #ident() },
+                                Err(_) => {
+                                    quote! { { compile_error!(concat!("invalid function name in skip_with: ", #fn_name)); <#ftype as ::std::default::Default>::default() } }
+                                }
+                            }
+                        } else {
+                            quote! { <#ftype as ::std::default::Default>::default() }
+                        };
+                        let validates = parse_validations(fname, ftype, &f.attrs);
+                        desers.push(quote! {
+                            let #fname: #ftype = if #marker_ident == #m {
+                                #default_expr
+                            } else {
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                #(#validates)*
+                                offset += __new_offset;
+                                __val
+                            };
+                        });
+                    } else {
+                        let validates = parse_validations(fname, ftype, &f.attrs);
+                        desers.push(quote! {
+                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                            let #fname: #ftype = __val;
+                            #(#validates)*
+                            offset += __new_offset;
+                        });
+                    }
+                }
+            }
+            let construct = quote! {
+                #name #ty_params { #(#field_names),* }
+            };
+            (construct, desers)
+        }
+        Fields::Unnamed(unnamed) => {
+            let mut desers = Vec::new();
+            let mut field_names = Vec::new();
+            for (i, f) in unnamed.unnamed.iter().enumerate() {
+                let fname = syn::Ident::new(&format!("__f{}", i), name.span());
+                let ftype = &f.ty;
+                field_names.push(fname.clone());
+
+                let (skip, _) = has_skip_attr(&f.attrs);
+                if skip {
+                    desers.push(quote! {
+                        let #fname: #ftype = <#ftype as ::std::default::Default>::default();
+                    });
+                } else {
+                    let skip_with = has_skip_with_attr(&f.attrs);
+                    if let Some((m, default_fn)) = skip_with {
+                        let default_expr = if let Some(fn_name) = default_fn {
+                            match syn::parse_str::<syn::Ident>(&fn_name) {
+                                Ok(ident) => quote! { #ident() },
+                                Err(_) => {
+                                    quote! { { compile_error!(concat!("invalid function name in skip_with: ", #fn_name)); <#ftype as ::std::default::Default>::default() } }
+                                }
+                            }
+                        } else {
+                            quote! { <#ftype as ::std::default::Default>::default() }
+                        };
+                        let validates = parse_validations(&fname, ftype, &f.attrs);
+                        desers.push(quote! {
+                            let #fname: #ftype = if #marker_ident == #m {
+                                #default_expr
+                            } else {
+                                let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                                #(#validates)*
+                                offset += __new_offset;
+                                __val
+                            };
+                        });
+                    } else {
+                        let validates = parse_validations(&fname, ftype, &f.attrs);
+                        desers.push(quote! {
+                            let (__val, __new_offset) = ::afastdata::AFastDeserialize::from_bytes(&data[offset..])?;
+                            let #fname: #ftype = __val;
+                            #(#validates)*
+                            offset += __new_offset;
+                        });
+                    }
+                }
             }
             let construct = quote! {
                 #name #ty_params ( #(#field_names),* )
