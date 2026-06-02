@@ -28,14 +28,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.8"
+afastdata = "0.0.9"
 ```
 
 For `u64` length prefix or custom enum tag type:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.8", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.9", features = ["len-u64", "tag-u16"] }
 ```
 
 ### Basic Usage

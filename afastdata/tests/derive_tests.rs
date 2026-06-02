@@ -147,7 +147,7 @@ fn test_multi_generic() {
     });
     roundtrip(&MultiGeneric {
         first: true,
-        second: 3.14f64,
+        second: std::f64::consts::PI,
     });
 }
 
@@ -396,7 +396,7 @@ fn test_skip_named_field() {
     let (decoded, _) = WithSkip::from_bytes(&bytes).unwrap();
     assert_eq!(decoded.visible, 1);
     assert_eq!(decoded._hidden, String::new());
-    assert_eq!(decoded.also_visible, true);
+    assert!(decoded.also_visible);
 }
 
 #[test]
@@ -418,7 +418,7 @@ fn test_skip_tuple_field() {
     let (decoded, _) = TupleWithSkip::from_bytes(&bytes).unwrap();
     assert_eq!(decoded.0, 1);
     assert_eq!(decoded.1, String::new());
-    assert_eq!(decoded.2, true);
+    assert!(decoded.2);
 }
 
 // ==================== 枚举变体 Skip / Enum Variant Skip ====================
@@ -991,7 +991,7 @@ fn test_skip_with_tuple_marker_match() {
     let (decoded, _) = TupleSkipWith::from_bytes_with(&bytes_with, "hidden").unwrap();
     assert_eq!(decoded.0, 1);
     assert_eq!(decoded.1, String::new()); // Default::default()
-    assert_eq!(decoded.2, true);
+    assert!(decoded.2);
 }
 
 #[test]
@@ -1205,5 +1205,5 @@ fn test_skip_with_nested_tuple_struct() {
     assert_eq!(decoded.tag, 5);
     assert_eq!(decoded.inner.0, 10);
     assert_eq!(decoded.inner.1, String::new()); // Default::default()
-    assert_eq!(decoded.inner.2, true);
+    assert!(decoded.inner.2);
 }

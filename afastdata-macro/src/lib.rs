@@ -15,8 +15,8 @@
 //!   / Index-based field serialization/deserialization
 //! - **单元结构体 (Unit struct)**：生成空实现（不产生任何字节）
 //!   / Generates an empty implementation (no bytes produced)
-//! - **枚举 (Enum)**：写入 `u32` 变体索引 + 变体字段数据
-//!   / Writes a `u32` variant index + variant field data
+//! - **枚举 (Enum)**：写入变体标签 + 变体字段数据（标签类型可通过 feature 切换）
+//!   / Writes a variant tag + variant field data (tag type switchable via features)
 //!
 //! ## 编码格式 / Encoding Format
 //!
@@ -31,7 +31,7 @@
 //!
 //! | 编码内容 / Content | 类型 / Type | 说明 / Description |
 //! |---|---|---|
-//! | 变体索引 / Variant index | `u32` little-endian | 从 0 开始递增 / Starts from 0, incrementing |
+//! | 变体索引 / Variant index | `u8`/`u16`/`u32` little-endian | 默认 `u8`，从 0 开始递增；通过 `tag-u16`/`tag-u32` feature 切换 / Default `u8`, starts from 0; switchable via `tag-u16`/`tag-u32` features |
 //! | 变体字段 / Variant fields | 逐字段编码 / Field-wise encoding | 仅非 unit 变体 / Only for non-unit variants |
 //!
 //! ## 泛型支持 / Generic Support
@@ -726,9 +726,13 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// 为结构体的字段生成序列化代码。内部辅助函数。
+/// 为结构体的字段生成 `to_bytes()` 序列化代码。内部辅助函数。
 ///
-/// Generates serialization code for struct fields. Internal helper.
+/// Generates `to_bytes()` serialization code for struct fields. Internal helper.
+///
+/// 跳过所有标记了 `#[afast(skip)]` 的字段。
+///
+/// Skips all fields marked with `#[afast(skip)]`.
 ///
 /// # 参数 / Parameters
 ///
@@ -745,8 +749,8 @@ pub fn derive_deserialize(input: TokenStream) -> TokenStream {
 ///
 /// # 生成格式 / Generated Format
 ///
-/// - **命名字段 (Named)**：`bytes.extend(AFastSerialize::to_bytes(&self.field_name));`
-/// - **元组字段 (Unnamed)**：`bytes.extend(AFastSerialize::to_bytes(&self.0));`
+/// - **命名字段 (Named)**：`__afast_bytes__.extend(AFastSerialize::to_bytes(&self.field_name));`
+/// - **元组字段 (Unnamed)**：`__afast_bytes__.extend(AFastSerialize::to_bytes(&self.0));`
 /// - **单元字段 (Unit)**：不生成任何代码 / Generates no code
 fn generate_serialize_fields(
     fields: &Fields,
@@ -842,6 +846,14 @@ fn generate_serialize_fields_with(
     }
 }
 
+/// 检查字段是否有 `#[afast(skip)]` 或 `#[afast(skip("fn_name"))]` 属性。
+///
+/// Checks whether a field has `#[afast(skip)]` or `#[afast(skip("fn_name"))]` attribute.
+///
+/// 返回值 / Returns:
+/// - `(true, None)`：`#[afast(skip)]`，反序列化用 `Default` / uses `Default` for deserialization
+/// - `(true, Some("fn"))`：`#[afast(skip("fn"))]`，反序列化用指定函数 / uses specified function
+/// - `(false, None)`：无 skip 属性 / no skip attribute
 fn has_skip_attr(attrs: &[Attribute]) -> (bool, Option<String>) {
     for attr in attrs {
         if attr.path().is_ident("afast")
@@ -885,14 +897,14 @@ fn has_skip_with_attr(attrs: &[Attribute]) -> Option<(String, Option<String>)> {
                 attr.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
         {
             for meta in nested {
-                if let Meta::List(meta_list) = meta {
-                    if meta_list.path.is_ident("skip_with") {
-                        let tokens = meta_list.tokens.clone();
-                        if let Ok(args) = syn::parse2::<SkipWithArgs>(tokens) {
-                            return Some((args.marker.value(), args.default_fn.map(|s| s.value())));
-                        }
-                        return None;
+                if let Meta::List(meta_list) = meta
+                    && meta_list.path.is_ident("skip_with")
+                {
+                    let tokens = meta_list.tokens.clone();
+                    if let Ok(args) = syn::parse2::<SkipWithArgs>(tokens) {
+                        return Some((args.marker.value(), args.default_fn.map(|s| s.value())));
                     }
+                    return None;
                 }
             }
         }
@@ -900,12 +912,21 @@ fn has_skip_with_attr(attrs: &[Attribute]) -> Option<(String, Option<String>)> {
     None
 }
 
+/// `#[afast(skip_with(...))]` 属性的解析结果。
+///
+/// Parsed representation of the `#[afast(skip_with(...))]` attribute.
+///
+/// - `marker`：用于匹配的标记字符串 / The marker string used for matching
+/// - `default_fn`：可选的默认值生成函数名 / Optional function name for generating default values
 struct SkipWithArgs {
     marker: LitStr,
     default_fn: Option<LitStr>,
 }
 
 impl Parse for SkipWithArgs {
+    /// 解析 `"marker"` 或 `"marker", "default_fn"` 格式的参数。
+    ///
+    /// Parses arguments in the format `"marker"` or `"marker", "default_fn"`.
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let marker: LitStr = input.parse()?;
         let default_fn = if input.peek(Token![,]) {
@@ -918,12 +939,20 @@ impl Parse for SkipWithArgs {
     }
 }
 
+/// 范围校验中使用的值，支持整数和浮点数。
+///
+/// A value used in range validation, supporting both integers and floats.
 enum RangeValue {
+    /// 整数字面量 / Integer literal
     Int(LitInt),
+    /// 浮点字面量 / Float literal
     Float(LitFloat),
 }
 
 impl RangeValue {
+    /// 将值转换为可用于代码生成的 `TokenStream`。
+    ///
+    /// Converts the value into a `TokenStream` for code generation.
     fn to_token_stream(&self) -> proc_macro2::TokenStream {
         match self {
             RangeValue::Int(v) => quote! { #v },
@@ -932,16 +961,31 @@ impl RangeValue {
     }
 }
 
+/// `gt`/`gte`/`lt`/`lte` 范围校验的参数。
+///
+/// Parameters for `gt`/`gte`/`lt`/`lte` range validation.
+///
+/// 格式：`(比较值, 错误码, "错误消息")`
+///
+/// Format: `(comparison_value, error_code, "error message")`
 struct Range {
+    /// 要比较的阈值 / The threshold value to compare against
     value: RangeValue,
     _comma1: Token![,],
+    /// 验证失败时的错误码 / Error code when validation fails
     code: LitInt,
     _comma2: Token![,],
+    /// 验证失败时的错误消息 / Error message when validation fails
     msg: LitStr,
 }
 
 impl Parse for Range {
+    /// 解析 `(value, code, "msg")` 格式的参数，自动识别整数或浮点值。
+    ///
+    /// Parses arguments in `(value, code, "msg")` format, automatically detecting
+    /// integer or float values.
     fn parse(input: ParseStream) -> syn::Result<Self> {
+        // 优先尝试解析为浮点数，再尝试整数
         // Try to parse as float first, then as int
         let value = if input.peek(LitFloat) {
             RangeValue::Float(input.parse()?)
@@ -958,17 +1002,31 @@ impl Parse for Range {
     }
 }
 
+/// `len` 长度校验的参数。
+///
+/// Parameters for `len` length validation.
+///
+/// 格式：`(min, max, 错误码, "错误消息")`
+///
+/// Format: `(min, max, error_code, "error message")`
 struct Length {
+    /// 最小长度（含）/ Minimum length (inclusive)
     min: LitInt,
     _comma1: Token![,],
+    /// 最大长度（含）/ Maximum length (inclusive)
     max: LitInt,
     _comma2: Token![,],
+    /// 验证失败时的错误码 / Error code when validation fails
     code: LitInt,
     _comma3: Token![,],
+    /// 验证失败时的错误消息 / Error message when validation fails
     msg: LitStr,
 }
 
 impl Parse for Length {
+    /// 解析 `(min, max, code, "msg")` 格式的参数。
+    ///
+    /// Parses arguments in `(min, max, code, "msg")` format.
     fn parse(input: ParseStream) -> syn::Result<Self> {
         Ok(Length {
             min: input.parse()?,
@@ -982,20 +1040,29 @@ impl Parse for Length {
     }
 }
 
+/// `of` 校验中允许的值，支持多种字面量类型。
+///
+/// An allowed value in `of` validation, supporting multiple literal types.
 #[derive(Clone)]
 enum ValidateValue {
+    /// 整数值 / Integer value
     Int(i64),
+    /// 浮点值 / Float value
     Float(f64),
+    /// 布尔值 / Boolean value
     Bool(bool),
+    /// 字符串值 / String value
     Str(String),
 }
 
 impl ValidateValue {
-    /// 将值转换为代码生成中使用的 TokenStream
+    /// 将值转换为代码生成中使用的 TokenStream。
     ///
-    /// 例如：
-    /// ValidateValue::Int(42) → quote! { 42 }
-    /// ValidateValue::Str("hello") → quote! { "hello" }
+    /// Converts the value into a `TokenStream` for code generation.
+    ///
+    /// 例如 / Example:
+    /// - `ValidateValue::Int(42)` → `quote! { 42 }`
+    /// - `ValidateValue::Str("hello")` → `quote! { "hello" }`
     fn to_token_stream(&self) -> proc_macro2::TokenStream {
         match self {
             ValidateValue::Int(v) => quote! { #v },
@@ -1015,13 +1082,26 @@ impl ValidateValue {
     }
 }
 
+/// `of` 枚举值校验的参数。
+///
+/// Parameters for `of` enum-value validation.
+///
+/// 格式：`([值1, 值2, ...], 错误码, "错误消息")`
+///
+/// Format: `([val1, val2, ...], error_code, "error message")`
 struct OfValidator {
+    /// 允许的值列表 / List of allowed values
     allowed_values: Vec<ValidateValue>,
+    /// 验证失败时的错误码 / Error code when validation fails
     code: syn::LitInt,
+    /// 验证失败时的错误消息 / Error message when validation fails
     msg: syn::LitStr,
 }
 
 impl Parse for OfValidator {
+    /// 解析 `([val1, val2, ...], code, "msg")` 格式的参数。
+    ///
+    /// Parses arguments in `([val1, val2, ...], code, "msg")` format.
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let content;
         syn::bracketed!(content in input);
@@ -1090,25 +1170,25 @@ impl Parse for OfValidator {
 ///
 /// Checks whether the field type is a numeric type.
 fn is_numeric_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            let name = segment.ident.to_string();
-            return matches!(
-                name.as_str(),
-                "i8" | "i16"
-                    | "i32"
-                    | "i64"
-                    | "i128"
-                    | "u8"
-                    | "u16"
-                    | "u32"
-                    | "u64"
-                    | "u128"
-                    | "usize"
-                    | "f32"
-                    | "f64"
-            );
-        }
+    if let Type::Path(TypePath { path, .. }) = ty
+        && let Some(segment) = path.segments.last()
+    {
+        let name = segment.ident.to_string();
+        return matches!(
+            name.as_str(),
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "i128"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "u128"
+                | "usize"
+                | "f32"
+                | "f64"
+        );
     }
     false
 }
@@ -1136,14 +1216,12 @@ fn extract_option_inner(ty: &Type) -> Option<&Type> {
         path: Path { segments, .. },
         ..
     }) = ty
+        && segments.len() == 1
+        && segments[0].ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &segments[0].arguments
+        && let Some(syn::GenericArgument::Type(inner)) = args.args.first()
     {
-        if segments.len() == 1 && segments[0].ident == "Option" {
-            if let syn::PathArguments::AngleBracketed(args) = &segments[0].arguments {
-                if let Some(syn::GenericArgument::Type(inner)) = args.args.first() {
-                    return Some(inner);
-                }
-            }
-        }
+        return Some(inner);
     }
     None
 }
@@ -1166,26 +1244,25 @@ fn is_comparable_type(ty: &Type) -> bool {
 ///
 /// Checks whether the field type is a string or collection type.
 fn is_collection_type(ty: &Type) -> bool {
-    if let Type::Path(TypePath { path, .. }) = ty {
-        if let Some(segment) = path.segments.last() {
-            let name = segment.ident.to_string();
-            return matches!(
-                name.as_str(),
-                "String" | "Vec" | "BTreeSet" | "BTreeMap" | "HashSet" | "HashMap"
-            );
-        }
+    if let Type::Path(TypePath { path, .. }) = ty
+        && let Some(segment) = path.segments.last()
+    {
+        let name = segment.ident.to_string();
+        return matches!(
+            name.as_str(),
+            "String" | "Vec" | "BTreeSet" | "BTreeMap" | "HashSet" | "HashMap"
+        );
     }
     // [T; N] arrays
     if let Type::Array(_) = ty {
         return true;
     }
     // &str
-    if let Type::Reference(r) = ty {
-        if let Type::Path(TypePath { path, .. }) = &*r.elem {
-            if let Some(segment) = path.segments.last() {
-                return segment.ident == "str";
-            }
-        }
+    if let Type::Reference(r) = ty
+        && let Type::Path(TypePath { path, .. }) = &*r.elem
+        && let Some(segment) = path.segments.last()
+    {
+        return segment.ident == "str";
     }
     false
 }
@@ -1623,19 +1700,15 @@ fn parse_validations(
                             };
                             if field_is_option {
                                 validates.push(quote! {
-                                        let length = match &#field_name {
-                                            Some(s) => {
-                                                let __length = s.len();
-                                                if __length < #min || __length > #max {
-                                                    return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
-                                                }
-                                            },
-                                            None => {},
-                                        };
+                                        if let Some(ref __val) = #field_name {
+                                            if !(#min..=#max).contains(&__val.len()) {
+                                                return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
+                                            }
+                                        }
                                     });
                             } else {
                                 validates.push(quote! {
-                                        if #field_name.len() < #min || #field_name.len() > #max {
+                                        if !(#min..=#max).contains(&#field_name.len()) {
                                             return Err(::afastdata::Error::validate(#code, #err_msg.to_string()));
                                         }
                                     });

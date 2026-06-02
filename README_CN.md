@@ -28,14 +28,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.8"
+afastdata = "0.0.9"
 ```
 
 如需 `u64` 长度前缀或自定义枚举标签类型：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.8", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.9", features = ["len-u64", "tag-u16"] }
 ```
 
 ### 基本用法

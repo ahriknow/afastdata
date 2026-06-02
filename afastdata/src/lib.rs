@@ -374,6 +374,15 @@ impl<T: AFastSerialize> AFastSerialize for Vec<T> {
         }
         result
     }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE + self.len());
+        write_len(&mut result, self.len());
+        for item in self {
+            result.extend(item.to_bytes_with(marker));
+        }
+        result
+    }
 }
 
 impl<T: AFastDeserialize> AFastDeserialize for Vec<T> {
@@ -401,6 +410,17 @@ impl<T: AFastDeserialize> AFastDeserialize for Vec<T> {
         }
         Ok((vec, offset))
     }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut vec = Vec::with_capacity(len);
+        for _ in 0..len {
+            let (item, new_offset) = T::from_bytes_with(&data[offset..], marker)?;
+            vec.push(item);
+            offset += new_offset;
+        }
+        Ok((vec, offset))
+    }
 }
 
 // ==================== Option<T> ====================
@@ -420,6 +440,17 @@ impl<T: AFastSerialize> AFastSerialize for Option<T> {
             Some(val) => {
                 let mut result = vec![1u8];
                 result.extend(val.to_bytes());
+                result
+            }
+            None => vec![0u8],
+        }
+    }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        match self {
+            Some(val) => {
+                let mut result = vec![1u8];
+                result.extend(val.to_bytes_with(marker));
                 result
             }
             None => vec![0u8],
@@ -453,18 +484,23 @@ impl<T: AFastDeserialize> AFastDeserialize for Option<T> {
             v => Err(Error::deserialize(format!("Invalid Option tag: {}", v))),
         }
     }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let bytes = read_exact(data, 0, 1)?;
+        match bytes[0] {
+            0 => Ok((None, 1)),
+            1 => {
+                let (val, new_offset) = T::from_bytes_with(&data[1..], marker)?;
+                Ok((Some(val), 1 + new_offset))
+            }
+            v => Err(Error::deserialize(format!("Invalid Option tag: {}", v))),
+        }
+    }
 }
 
 // ==================== [T; N] 固定大小数组 / Fixed-size Arrays ====================
 
 impl<T: AFastSerialize, const N: usize> AFastSerialize for [T; N] {
-    /// 将固定大小数组序列化为：逐个元素的序列化数据，无长度前缀。
-    ///
-    /// Serializes a fixed-size array as: element-wise serialized data with no length prefix.
-    ///
-    /// 因为数组大小在编译时已知，所以不需要长度前缀。
-    ///
-    /// Since the array size is known at compile time, no length prefix is needed.
     fn to_bytes(&self) -> Vec<u8> {
         let mut result = Vec::with_capacity(LEN_INT_SIZE + N);
         for item in self {
@@ -472,22 +508,33 @@ impl<T: AFastSerialize, const N: usize> AFastSerialize for [T; N] {
         }
         result
     }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE + N);
+        for item in self {
+            result.extend(item.to_bytes_with(marker));
+        }
+        result
+    }
 }
 
 impl<T: AFastDeserialize + Default + Copy, const N: usize> AFastDeserialize for [T; N] {
-    /// 从字节数据中反序列化固定大小数组。
-    ///
-    /// Deserializes a fixed-size array from byte data.
-    ///
-    /// 依次反序列化 `N` 个元素，要求元素类型实现 `Default` 和 `Copy`。
-    ///
-    /// Deserializes `N` elements sequentially. Requires the element type to implement
-    /// `Default` and `Copy`.
     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let mut arr = [T::default(); N];
         let mut offset = 0;
         for item in arr.iter_mut() {
             let (val, new_offset) = T::from_bytes(&data[offset..])?;
+            *item = val;
+            offset += new_offset;
+        }
+        Ok((arr, offset))
+    }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let mut arr = [T::default(); N];
+        let mut offset = 0;
+        for item in arr.iter_mut() {
+            let (val, new_offset) = T::from_bytes_with(&data[offset..], marker)?;
             *item = val;
             offset += new_offset;
         }
@@ -513,6 +560,13 @@ impl AFastSerialize for &str {
         result.extend_from_slice(bytes);
         result
     }
+
+    /// `&str` 是叶子类型，`to_bytes_with` 行为与 `to_bytes` 一致。
+    ///
+    /// `&str` is a leaf type; `to_bytes_with` behaves identically to `to_bytes`.
+    fn to_bytes_with(&self, _marker: &str) -> Vec<u8> {
+        self.to_bytes()
+    }
 }
 
 // ==================== HashMap ====================
@@ -524,6 +578,16 @@ impl<K: AFastSerialize, V: AFastSerialize> AFastSerialize for std::collections::
         for (k, v) in self {
             result.extend(k.to_bytes());
             result.extend(v.to_bytes());
+        }
+        result
+    }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for (k, v) in self {
+            result.extend(k.to_bytes_with(marker));
+            result.extend(v.to_bytes_with(marker));
         }
         result
     }
@@ -544,6 +608,19 @@ impl<K: AFastDeserialize + Eq + std::hash::Hash, V: AFastDeserialize> AFastDeser
         }
         Ok((map, offset))
     }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut map = std::collections::HashMap::with_capacity(len);
+        for _ in 0..len {
+            let (key, new_offset) = K::from_bytes_with(&data[offset..], marker)?;
+            offset += new_offset;
+            let (val, new_offset) = V::from_bytes_with(&data[offset..], marker)?;
+            offset += new_offset;
+            map.insert(key, val);
+        }
+        Ok((map, offset))
+    }
 }
 
 // ==================== HashSet ====================
@@ -554,6 +631,15 @@ impl<T: AFastSerialize> AFastSerialize for std::collections::HashSet<T> {
         write_len(&mut result, self.len());
         for item in self {
             result.extend(item.to_bytes());
+        }
+        result
+    }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for item in self {
+            result.extend(item.to_bytes_with(marker));
         }
         result
     }
@@ -570,6 +656,17 @@ impl<T: AFastDeserialize + Eq + std::hash::Hash> AFastDeserialize for std::colle
         }
         Ok((set, offset))
     }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut set = std::collections::HashSet::with_capacity(len);
+        for _ in 0..len {
+            let (item, new_offset) = T::from_bytes_with(&data[offset..], marker)?;
+            offset += new_offset;
+            set.insert(item);
+        }
+        Ok((set, offset))
+    }
 }
 
 // ==================== BTreeMap ====================
@@ -581,6 +678,16 @@ impl<K: AFastSerialize, V: AFastSerialize> AFastSerialize for std::collections::
         for (k, v) in self {
             result.extend(k.to_bytes());
             result.extend(v.to_bytes());
+        }
+        result
+    }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for (k, v) in self {
+            result.extend(k.to_bytes_with(marker));
+            result.extend(v.to_bytes_with(marker));
         }
         result
     }
@@ -601,6 +708,19 @@ impl<K: AFastDeserialize + Ord, V: AFastDeserialize> AFastDeserialize
         }
         Ok((map, offset))
     }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut map = std::collections::BTreeMap::new();
+        for _ in 0..len {
+            let (key, new_offset) = K::from_bytes_with(&data[offset..], marker)?;
+            offset += new_offset;
+            let (val, new_offset) = V::from_bytes_with(&data[offset..], marker)?;
+            offset += new_offset;
+            map.insert(key, val);
+        }
+        Ok((map, offset))
+    }
 }
 
 // ==================== BTreeSet ====================
@@ -614,6 +734,15 @@ impl<T: AFastSerialize> AFastSerialize for std::collections::BTreeSet<T> {
         }
         result
     }
+
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        let mut result = Vec::with_capacity(LEN_INT_SIZE);
+        write_len(&mut result, self.len());
+        for item in self {
+            result.extend(item.to_bytes_with(marker));
+        }
+        result
+    }
 }
 
 impl<T: AFastDeserialize + Ord> AFastDeserialize for std::collections::BTreeSet<T> {
@@ -622,6 +751,17 @@ impl<T: AFastDeserialize + Ord> AFastDeserialize for std::collections::BTreeSet<
         let mut set = std::collections::BTreeSet::new();
         for _ in 0..len {
             let (item, new_offset) = T::from_bytes(&data[offset..])?;
+            offset += new_offset;
+            set.insert(item);
+        }
+        Ok((set, offset))
+    }
+
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (len, mut offset) = read_len(data, 0)?;
+        let mut set = std::collections::BTreeSet::new();
+        for _ in 0..len {
+            let (item, new_offset) = T::from_bytes_with(&data[offset..], marker)?;
             offset += new_offset;
             set.insert(item);
         }
@@ -646,6 +786,13 @@ macro_rules! impl_tuple {
                 $(result.extend($rest.to_bytes());)*
                 result
             }
+            fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+                let ($first, $($rest,)*) = self;
+                let mut result = Vec::new();
+                result.extend($first.to_bytes_with(marker));
+                $(result.extend($rest.to_bytes_with(marker));)*
+                result
+            }
         }
 
         #[allow(non_snake_case)]
@@ -656,6 +803,16 @@ macro_rules! impl_tuple {
                 offset += new_offset;
                 $(
                     let ($rest, new_offset) = <$rest as AFastDeserialize>::from_bytes(&data[offset..])?;
+                    offset += new_offset;
+                )*
+                Ok((($first, $($rest,)*), offset))
+            }
+            fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+                let mut offset = 0;
+                let ($first, new_offset) = <$first as AFastDeserialize>::from_bytes_with(&data[offset..], marker)?;
+                offset += new_offset;
+                $(
+                    let ($rest, new_offset) = <$rest as AFastDeserialize>::from_bytes_with(&data[offset..], marker)?;
                     offset += new_offset;
                 )*
                 Ok((($first, $($rest,)*), offset))
@@ -672,11 +829,18 @@ impl<T: AFastSerialize> AFastSerialize for Box<T> {
     fn to_bytes(&self) -> Vec<u8> {
         (**self).to_bytes()
     }
+    fn to_bytes_with(&self, marker: &str) -> Vec<u8> {
+        (**self).to_bytes_with(marker)
+    }
 }
 
 impl<T: AFastDeserialize> AFastDeserialize for Box<T> {
     fn from_bytes(data: &[u8]) -> Result<(Self, usize), Error> {
         let (val, offset) = T::from_bytes(data)?;
+        Ok((Box::new(val), offset))
+    }
+    fn from_bytes_with(data: &[u8], marker: &str) -> Result<(Self, usize), Error> {
+        let (val, offset) = T::from_bytes_with(data, marker)?;
         Ok((Box::new(val), offset))
     }
 }
