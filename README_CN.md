@@ -28,14 +28,14 @@
 
 ```toml
 [dependencies]
-afastdata = "0.0.9"
+afastdata = "0.0.10"
 ```
 
 如需 `u64` 长度前缀或自定义枚举标签类型：
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.9", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.10", features = ["len-u64", "tag-u16"] }
 ```
 
 ### 基本用法
@@ -314,6 +314,58 @@ struct Record {
 | 结构体 | 逐字段编码，无额外前缀 | 变长 |
 | 枚举 | Tag(u8/u16/u32) 变体索引 + 变体字段数据 | 变长 |
 
+### 第三方类型（可选）
+
+通过 feature flag 启用。以下类型遵循与内建类型相同的编码约定。
+
+| 类型 | Feature | 编码格式 | 字节数 |
+|---|---|---|---|
+| `Ipv4Addr` | *（标准库，始终可用）* | 4 字节八位组 | 4 |
+| `Ipv6Addr` | *（标准库，始终可用）* | 16 字节八位组 | 16 |
+| `IpAddr` | *（标准库，始终可用）* | Tag (V4=0/V6=1) + 地址字节 | 5 或 17 |
+| `uuid::Uuid` | `uuid` | 16 字节 UUID | 16 |
+| `chrono::NaiveDate` | `chrono` | i32 (年) + u8 (月) + u8 (日) | 6 |
+| `chrono::NaiveTime` | `chrono` | u64 (自午夜起纳秒) | 8 |
+| `chrono::NaiveDateTime` | `chrono` | NaiveDate + NaiveTime | 14 |
+| `chrono::DateTime<Utc>` | `chrono` | i64 (时间戳) + u32 (子秒纳秒) | 12 |
+| `chrono::DateTime<Local>` | `chrono` | i64 (时间戳) + u32 (子秒纳秒) | 12 |
+| `rust_decimal::Decimal` | `rust_decimal` | i128 (尾数) + u32 (精度) | 20 |
+| `url::Url` | `url` | LenInt + UTF-8 字节（同 String） | 变长 |
+| `bytes::Bytes` | `bytes` | LenInt + 原始字节（同 `Vec<u8>`） | 变长 |
+| `bytes::BytesMut` | `bytes` | LenInt + 原始字节（同 `Vec<u8>`） | 变长 |
+| `BigDecimal` | `bigdecimal` | 符号 + LenInt + BigInt 字节 + i64 指数 | 变长 |
+| `Ipv4Network` | `ipnetwork` | 4 字节地址 + 1 字节前缀长度 | 5 |
+| `Ipv6Network` | `ipnetwork` | 16 字节地址 + 1 字节前缀长度 | 17 |
+| `IpNetwork` | `ipnetwork` | Tag (V4=0/V6=1) + 网络字节 | 6 或 18 |
+| `MacAddress` | `mac_address` | 6 字节 MAC 地址 | 6 |
+| `sqlx::types::Json<T>` | `sqlx` | 与内部类型 `T` 格式一致 | 与 `T` 相同 |
+
+#### 第三方类型示例
+
+```rust
+use afastdata::{AFastSerialize, AFastDeserialize};
+
+// uuid
+let id = uuid::Uuid::nil();
+let bytes = id.to_bytes();
+let (decoded, _) = <uuid::Uuid as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// chrono
+let dt = chrono::DateTime::from_timestamp(1700000000, 0).unwrap();
+let bytes = dt.to_bytes();
+let (decoded, _) = <chrono::DateTime<chrono::Utc> as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// url
+let url = url::Url::parse("https://example.com/path").unwrap();
+let bytes = url.to_bytes();
+let (decoded, _) = <url::Url as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// bytes
+let b = bytes::Bytes::from(vec![1u8, 2, 3]);
+let bytes = b.to_bytes();
+let (decoded, _) = <bytes::Bytes as AFastDeserialize>::from_bytes(&bytes).unwrap();
+```
+
 ## 编码格式详解
 
 ### 结构体
@@ -352,6 +404,16 @@ Unit 变体只写入索引，无字段数据。
 | `tuple-8` | 元组支持最多 8 个元素 | 否 |
 | `tuple-16` | 元组支持最多 16 个元素 | 是 |
 | `tuple-32` | 元组支持最多 32 个元素 | 否 |
+| `serde_json` | 支持 `serde_json::Value` / `serde_json::Number` | 否 |
+| `uuid` | 支持 `uuid::Uuid` | 否 |
+| `chrono` | 支持 `NaiveDate` / `NaiveTime` / `NaiveDateTime` / `DateTime<Utc>` / `DateTime<Local>` | 否 |
+| `rust_decimal` | 支持 `rust_decimal::Decimal` | 否 |
+| `url` | 支持 `url::Url` | 否 |
+| `bytes` | 支持 `bytes::Bytes` / `bytes::BytesMut` | 否 |
+| `bigdecimal` | 支持 `bigdecimal::BigDecimal` | 否 |
+| `ipnetwork` | 支持 `Ipv4Network` / `Ipv6Network` / `IpNetwork` | 否 |
+| `mac_address` | 支持 `MacAddress` | 否 |
+| `sqlx` | 支持 `sqlx::types::Json<T>` 包装器（隐含 `serde_json`） | 否 |
 
 ## 项目结构
 

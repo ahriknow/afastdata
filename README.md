@@ -28,14 +28,14 @@ Add the dependency to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-afastdata = "0.0.9"
+afastdata = "0.0.10"
 ```
 
 For `u64` length prefix or custom enum tag type:
 
 ```toml
 [dependencies]
-afastdata = { version = "0.0.9", features = ["len-u64", "tag-u16"] }
+afastdata = { version = "0.0.10", features = ["len-u64", "tag-u16"] }
 ```
 
 ### Basic Usage
@@ -355,6 +355,58 @@ struct Record {
 | Struct | Field-by-field encoding, no extra prefix | Variable |
 | Enum | Tag(u8/u16/u32) variant index + variant field data | Variable |
 
+### Third-Party Types (Optional)
+
+Enable via feature flags. All types below follow the same encoding conventions as built-in types.
+
+| Type | Feature | Encoding | Size |
+|---|---|---|---|
+| `Ipv4Addr` | *(std, always available)* | 4-byte octets | 4 bytes |
+| `Ipv6Addr` | *(std, always available)* | 16-byte octets | 16 bytes |
+| `IpAddr` | *(std, always available)* | Tag (V4=0/V6=1) + address bytes | 5 or 17 bytes |
+| `uuid::Uuid` | `uuid` | 16-byte UUID | 16 bytes |
+| `chrono::NaiveDate` | `chrono` | i32 (year) + u8 (month) + u8 (day) | 6 bytes |
+| `chrono::NaiveTime` | `chrono` | u64 (nanoseconds since midnight) | 8 bytes |
+| `chrono::NaiveDateTime` | `chrono` | NaiveDate + NaiveTime | 14 bytes |
+| `chrono::DateTime<Utc>` | `chrono` | i64 (timestamp) + u32 (subsec_nanos) | 12 bytes |
+| `chrono::DateTime<Local>` | `chrono` | i64 (timestamp) + u32 (subsec_nanos) | 12 bytes |
+| `rust_decimal::Decimal` | `rust_decimal` | i128 (mantissa) + u32 (scale) | 20 bytes |
+| `url::Url` | `url` | LenInt + UTF-8 bytes (same as String) | Variable |
+| `bytes::Bytes` | `bytes` | LenInt + raw bytes (same as `Vec<u8>`) | Variable |
+| `bytes::BytesMut` | `bytes` | LenInt + raw bytes (same as `Vec<u8>`) | Variable |
+| `BigDecimal` | `bigdecimal` | sign + LenInt + BigInt bytes + i64 exponent | Variable |
+| `Ipv4Network` | `ipnetwork` | 4-byte address + 1-byte prefix length | 5 bytes |
+| `Ipv6Network` | `ipnetwork` | 16-byte address + 1-byte prefix length | 17 bytes |
+| `IpNetwork` | `ipnetwork` | Tag (V4=0/V6=1) + network bytes | 6 or 18 bytes |
+| `MacAddress` | `mac_address` | 6-byte MAC | 6 bytes |
+| `sqlx::types::Json<T>` | `sqlx` | Same as inner type `T` | Same as `T` |
+
+#### Third-Party Type Examples
+
+```rust
+use afastdata::{AFastSerialize, AFastDeserialize};
+
+// uuid
+let id = uuid::Uuid::nil();
+let bytes = id.to_bytes();
+let (decoded, _) = <uuid::Uuid as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// chrono
+let dt = chrono::DateTime::from_timestamp(1700000000, 0).unwrap();
+let bytes = dt.to_bytes();
+let (decoded, _) = <chrono::DateTime<chrono::Utc> as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// url
+let url = url::Url::parse("https://example.com/path").unwrap();
+let bytes = url.to_bytes();
+let (decoded, _) = <url::Url as AFastDeserialize>::from_bytes(&bytes).unwrap();
+
+// bytes
+let b = bytes::Bytes::from(vec![1u8, 2, 3]);
+let bytes = b.to_bytes();
+let (decoded, _) = <bytes::Bytes as AFastDeserialize>::from_bytes(&bytes).unwrap();
+```
+
 ## Encoding Format
 
 ### Struct
@@ -393,6 +445,16 @@ Variable-length types like `String` and `Vec<T>` use `LenInt` as the length pref
 | `tuple-8` | Tuple support up to 8 elements | No |
 | `tuple-16` | Tuple support up to 16 elements | Yes |
 | `tuple-32` | Tuple support up to 32 elements | No |
+| `serde_json` | `serde_json::Value` / `serde_json::Number` support | No |
+| `uuid` | `uuid::Uuid` support | No |
+| `chrono` | `NaiveDate` / `NaiveTime` / `NaiveDateTime` / `DateTime<Utc>` / `DateTime<Local>` support | No |
+| `rust_decimal` | `rust_decimal::Decimal` support | No |
+| `url` | `url::Url` support | No |
+| `bytes` | `bytes::Bytes` / `bytes::BytesMut` support | No |
+| `bigdecimal` | `bigdecimal::BigDecimal` support | No |
+| `ipnetwork` | `Ipv4Network` / `Ipv6Network` / `IpNetwork` support | No |
+| `mac_address` | `MacAddress` support | No |
+| `sqlx` | `sqlx::types::Json<T>` wrapper support (implies `serde_json`) | No |
 
 ## Project Structure
 

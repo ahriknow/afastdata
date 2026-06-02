@@ -15,6 +15,16 @@ categories = ["encoding"]
 
 [dependencies]
 afastdata-macro = { workspace = true }
+serde_json = { version = "1", optional = true }
+uuid = { version = "1", optional = true }
+chrono = { version = "0.4", optional = true }
+rust_decimal = { version = "1", optional = true }
+url = { version = "2", optional = true }
+bytes = { version = "1", optional = true }
+sqlx = { version = "0.9", optional = true }
+bigdecimal = { version = "0.4", optional = true }
+ipnetwork = { version = "0.20", optional = true }
+mac_address = { version = "1", optional = true }
 
 [features]
 default = ["tag-u8", "tuple-16"]
@@ -25,3 +35,13 @@ tag-u32 = ["afastdata-macro/tag-u32"]
 tuple-8 = []
 tuple-16 = []
 tuple-32 = []
+serde_json = ["dep:serde_json"]
+uuid = ["dep:uuid"]
+chrono = ["dep:chrono"]
+rust_decimal = ["dep:rust_decimal"]
+url = ["dep:url"]
+bytes = ["dep:bytes"]
+sqlx = ["dep:sqlx", "dep:serde_json"]
+bigdecimal = ["dep:bigdecimal"]
+ipnetwork = ["dep:ipnetwork"]
+mac_address = ["dep:mac_address"]
